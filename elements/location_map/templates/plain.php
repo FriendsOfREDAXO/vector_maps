@@ -25,6 +25,7 @@ $routePanelStyle = trim((string) ($elementData['route_panel_style'] ?? ''));
 $locate = !empty($elementData['locate']);
 $showSatellite = !empty($elementData['show_satellite']);
 $fullscreen = !empty($elementData['fullscreen']);
+$mapApps = !empty($elementData['map_apps']);
 $routePanel = !empty($elementData['route_panel']);
 $routeToLocked = !empty($elementData['route_to_locked']);
 $routeNoSteps = !empty($elementData['route_no_steps']);
@@ -101,6 +102,7 @@ $routePanelWidthValue = preg_match('/^\d+$/', $routePanelWidth) ? $routePanelWid
             <?= $locate ? ' locate' : '' ?>
             <?= $showSatellite ? ' show-satellite' : '' ?>
             <?= $fullscreen ? ' fullscreen' : '' ?>
+            <?= $mapApps ? ' map-apps' : '' ?>
             <?= $markerJson !== null ? ' markers=\'' . rex_escape((string) $markerJson) . '\'' : '' ?>>
         </vectormap>
 <?php if ($enableContainer): ?>

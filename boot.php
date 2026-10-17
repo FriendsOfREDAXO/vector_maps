@@ -79,6 +79,9 @@ if (rex::isBackend() && rex::getUser()) {
         'theme_vector_only' => \rex_i18n::msg('vector_maps_picker_theme_vector_only'),
     ]);
 
+    // CSRF-Token für Theme speichern/löschen (theme-editor.js)
+    rex_view::setJsProperty('vector_maps_theme_csrf', \rex_csrf_token::factory('vector_maps_themes')->getUrlParams());
+
     // Basisstil je Custom-Theme (liberty/bright/positron) – vermeidet Liberty-Zwischenladung bei map-style=<theme-name>
     rex_view::setJsProperty('vector_maps_theme_base_styles', ThemeManager::getBaseStyleMap());
 

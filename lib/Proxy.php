@@ -41,6 +41,13 @@ class Proxy
     private const FAIL_PAUSE = 30;
     /** Höchstgröße einer Antwort (Bytes) – größere Antworten werden abgebrochen */
     private const MAX_BYTES = 25 * 1024 * 1024;
+    /** Größte JSON-Datei, die als Style geprüft und korrigiert wird */
+    private const STYLE_MAX_BYTES = 3 * 1024 * 1024;
+    /** Ausdrücke ohne Zahlenwerte als Argumente (Vergleiche, Bedingungen, Text) */
+    private const GUARD_SKIP = ['==', '!=', '<', '<=', '>', '>=', '!', 'all', 'any', 'none', 'has', '!has', 'in', '!in',
+        'to-boolean', 'to-string', 'typeof', 'geometry-type', 'id', 'properties', 'feature-state', 'zoom', 'literal',
+        'within', 'distance', 'is-supported-script', 'collator', 'format', 'image', 'number-format', 'concat',
+        'downcase', 'upcase', 'resolved-locale', 'at', 'index-of', 'slice', 'length'];
 
     public static function intercept(): void
     {
@@ -115,15 +122,7 @@ class Proxy
             $allowedDomains
         ));
 
-        $isAllowed = false;
-        foreach ($allowedDomains as $domain) {
-            if (str_starts_with($targetUrl, $domain)) {
-                $isAllowed = true;
-                break;
-            }
-        }
-
-        if (!$isAllowed) {
+        if (!self::isAllowed($targetUrl, $allowedDomains)) {
             rex_response::setStatus(rex_response::HTTP_FORBIDDEN);
             rex_response::sendContent('URL not allowed by proxy.');
             exit;
@@ -134,21 +133,84 @@ class Proxy
         $sub2 = substr($hash, 2, 2);
         $cacheBase = rex_path::addonCache('vector_maps', "proxy/$sub1/$sub2/$hash");
 
+        // Gelegentlich aufräumen: ein zufälliger Unterordner, alte Dateien weg (begrenzter Aufwand je Anfrage)
+        if (1 === random_int(1, 200)) {
+            self::cleanupRandomDir();
+        }
+
+        $ttl = self::ttlFor($targetUrl);
+
         // Wildcard-Suche: Extension erst nach dem Fetch bekannt (OpenFreeMap hat keine Extensions in URLs)
         $cached = glob($cacheBase . '.*');
-        if (is_array($cached) && !empty($cached) && file_exists($cached[0])) {
+        $stale = null;
+        if (is_array($cached) && !empty($cached) && is_file($cached[0])) {
             $ext = pathinfo($cached[0], PATHINFO_EXTENSION);
             if ('json' === strtolower($ext)) {
                 self::sanitizeCachedStyleJsonFile($cached[0]);
             }
-            self::serveFile($cached[0], $ext);
-            exit;
+            if (time() - (int) @filemtime($cached[0]) < $ttl) {
+                self::serveFile($cached[0], $ext, $ttl);
+            }
+            // abgelaufen: neu holen – scheitert das, die alte Fassung ausliefern
+            $stale = $cached[0];
         }
 
-        self::fetchAndCache($targetUrl, $cacheBase);
+        self::fetchAndCache($targetUrl, $cacheBase, $allowedDomains, $ttl, $stale);
     }
 
-    private static function fetchAndCache(string $url, string $cacheBase): void
+    /** Darf der Proxy diese Adresse abrufen? Nur https/http-Adressen, die mit einer erlaubten Domain beginnen. */
+    private static function isAllowed(string $url, array $allowedDomains): bool
+    {
+        foreach ($allowedDomains as $domain) {
+            if (is_string($domain) && '' !== $domain && str_starts_with($url, $domain)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Wie lange eine Antwort im Cache gilt (Sekunden): Kacheln, Schriften, Styles lange; Suche, Routen, Wetter kurz.
+     */
+    private static function ttlFor(string $url): int
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        return match (true) {
+            in_array($host, ['api.brightsky.dev', 'api.open-meteo.com'], true) => 900,
+            in_array($host, ['router.project-osrm.org', 'routing.openstreetmap.de', 'api.transitous.org'], true),
+            str_contains($host, 'overpass-api.de') => 3600,
+            'nominatim.openstreetmap.org' === $host => 86400,
+            in_array($host, ['raw.githubusercontent.com', 'github.com', 'www.geoboundaries.org'], true) => 7 * 86400,
+            in_array($host, ['tiles.openfreemap.org', 'api.maptiler.com', 'tiles.stadiamaps.com', 'cdn.protomaps.com',
+                'server.arcgisonline.com', 'services.arcgisonline.com'], true),
+            str_ends_with($host, 'tile.openstreetmap.org') => 30 * 86400,
+            default => 86400,
+        };
+    }
+
+    /** Einen zufälligen Cache-Unterordner aufräumen: Dateien älter als 60 Tage, liegengebliebene Temp-Dateien */
+    private static function cleanupRandomDir(): void
+    {
+        $dir = rex_path::addonCache('vector_maps', 'proxy/' . bin2hex(random_bytes(1)) . '/' . bin2hex(random_bytes(1)));
+        if (!is_dir($dir)) {
+            return;
+        }
+        $now = time();
+        foreach ((array) @scandir($dir) as $name) {
+            if (!is_string($name) || '.' === $name || '..' === $name) {
+                continue;
+            }
+            $file = $dir . '/' . $name;
+            $age = $now - (int) @filemtime($file);
+            if (is_file($file) && ($age > 60 * 86400 || (str_ends_with($name, '.tmp') && $age > 3600))) {
+                @unlink($file);
+            }
+        }
+    }
+
+    private static function fetchAndCache(string $url, string $cacheBase, array $allowedDomains, int $ttl, ?string $stale): void
     {
         // PHP dekodiert GET-Parameter automatisch – Leerzeichen und Sonderzeichen
         // müssen vor dem cURL-Aufruf re-enkodiert werden, sonst lehnt der Server ab.
@@ -193,6 +255,9 @@ class Proxy
 
         // Upstream gerade gestört: sofort antworten statt einen PHP-Prozess bis zum Timeout zu belegen
         if (self::upstreamPaused($host)) {
+            if (null !== $stale) {
+                self::serveFile($stale, pathinfo($stale, PATHINFO_EXTENSION), 300);
+            }
             rex_response::setStatus(rex_response::HTTP_SERVICE_UNAVAILABLE);
             rex_response::setHeader('Retry-After', (string) self::FAIL_PAUSE);
             rex_response::sendContent('Proxy upstream temporarily unavailable.');
@@ -223,28 +288,43 @@ class Proxy
             curl_setopt($ch, CURLOPT_HTTPHEADER, $commonHeaders);
         }
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        // Weiterleitungen selbst verfolgen: jedes Ziel muss wieder auf der Positivliste stehen (kein Umweg auf fremde Hosts)
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
         // CURLOPT_ENCODING = '' lässt cURL gzip/brotli automatisch dekomprimieren
         // ohne das schickt CloudFlare komprimierte Daten, MapLibre kann sie nicht parsen
         curl_setopt($ch, CURLOPT_ENCODING, '');
         // Kurze Zeitlimits: ein langsamer Upstream darf keine PHP-Prozesse blockieren (Overpass rechnet länger)
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
-        curl_setopt($ch, CURLOPT_TIMEOUT, $isOverpassInterpreter ? 20 : 10);
-        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $isOverpassInterpreter ? 25 : 10);
         curl_setopt($ch, CURLOPT_NOPROGRESS, false);
         curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, static fn ($r, int $dlTotal, int $dlNow): int => $dlNow > self::MAX_BYTES ? 1 : 0);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
 
         $content = curl_exec($ch);
         $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        for ($hop = 0; $hop < 3 && $httpCode >= 300 && $httpCode < 400; ++$hop) {
+            $next = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+            if ('' === $next || !str_starts_with($next, 'https://') || !self::isAllowed($next, $allowedDomains)) {
+                break;
+            }
+            curl_setopt($ch, CURLOPT_URL, $next);
+            curl_setopt($ch, CURLOPT_HTTPGET, true);
+            $content = curl_exec($ch);
+            $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        }
         $rawContentType = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
         // curl_close() hat seit PHP 8.0 keine Wirkung und ist ab PHP 8.5 deprecated – Handle wird automatisch freigegeben
         unset($ch);
 
         if ($httpCode !== 200 || false === $content) {
             // Zeitüberschreitung, Verbindungsfehler oder Serverfehler: Upstream kurz pausieren
-            if (0 === $httpCode || 429 === $httpCode || $httpCode >= 500) {
+            // (Overpass nicht: dort heißt ein Timeout meist nur „zu große Abfrage“)
+            if (!$isOverpassInterpreter && (0 === $httpCode || 429 === $httpCode || $httpCode >= 500)) {
                 self::pauseUpstream($host);
+            }
+            // abgelaufene Fassung ist besser als ein Fehler
+            if (null !== $stale) {
+                self::serveFile($stale, pathinfo($stale, PATHINFO_EXTENSION), 300);
             }
             $status = ($httpCode >= 400 && $httpCode <= 599) ? $httpCode : 502;
             rex_response::setStatus($status);
@@ -275,18 +355,23 @@ class Proxy
             $content = self::sanitizeStyleJsonString((string) $content);
         }
 
+        // andere Endung als die abgelaufene Fassung: alte Datei entfernen
+        if (null !== $stale && $stale !== $cacheBase . '.' . $ext) {
+            @unlink($stale);
+        }
         $cacheFile = $cacheBase . '.' . $ext;
         self::writeAtomic($cacheFile, (string) $content);
 
-        self::serveFile($cacheFile, $ext);
+        self::serveFile($cacheFile, $ext, $ttl);
     }
 
-    private static function serveFile(string $filePath, string $ext): void
+    private static function serveFile(string $filePath, string $ext, int $maxAge = 604800): void
     {
         $contentType = self::MIME_MAP[$ext] ?? 'application/octet-stream';
 
         rex_response::cleanOutputBuffers();
-        rex_response::sendCacheControl('public, max-age=604800');
+        // Browser-Cache wie Server-Cache (höchstens 7 Tage): Suche, Routen und Wetter bleiben aktuell
+        rex_response::sendCacheControl('public, max-age=' . min($maxAge, 604800));
         rex_response::setHeader('Access-Control-Allow-Origin', '*');
         rex_response::sendFile($filePath, $contentType);
         exit;
@@ -325,7 +410,15 @@ class Proxy
 
     private static function sanitizeCachedStyleJsonFile(string $filePath): void
     {
+        // Nur kleine Dateien prüfen (Styles sind ein paar hundert KB, GeoJSON kann groß sein)
+        if ((int) @filesize($filePath) > self::STYLE_MAX_BYTES) {
+            return;
+        }
         $raw = rex_file::get($filePath);
+        // Reparatur nur nötig, wenn die Datei noch mehrfach eingewickelte Ausdrücke enthält (ältere Fassungen)
+        if (!is_string($raw) || !str_contains($raw, '["coalesce",["coalesce"')) {
+            return;
+        }
         if (!is_string($raw) || '' === $raw) {
             return;
         }
@@ -339,6 +432,10 @@ class Proxy
 
     private static function sanitizeStyleJsonString(string $raw): string
     {
+        // Nur echte Style-Dokumente: klein genug und mit layers/sources – große GeoJSON-Antworten gar nicht dekodieren
+        if (strlen($raw) > self::STYLE_MAX_BYTES || !str_contains($raw, '"layers"') || !str_contains($raw, '"sources"')) {
+            return $raw;
+        }
         $data = json_decode($raw, true);
         if (!is_array($data)) {
             return $raw;
@@ -408,16 +505,28 @@ class Proxy
         if (!array_is_list($value) || [] === $value || !is_string($value[0])) {
             return array_map(self::sanitizeNumericStyleExpression(...), $value);
         }
-        if ('literal' === $value[0]) {
-            return $value;
-        }
-        if ('get' === $value[0]) {
+        $op = $value[0];
+        if ('get' === $op) {
             return ['coalesce', $value, 0];
         }
-        if ('coalesce' !== $value[0]) {
-            $out = [$value[0]];
-            foreach (array_slice($value, 1) as $entry) {
-                $out[] = self::sanitizeNumericStyleExpression($entry);
+        // Vergleiche, Bedingungen, Text: keine Zahlenwerte – nichts absichern
+        if (in_array($op, self::GUARD_SKIP, true)) {
+            return $value;
+        }
+        // nur Ausgabewerte absichern – Eingaben, Bedingungen und Stufen bleiben (wie vmGuardGets() in vectormaps.js)
+        $last = count($value) - 1;
+        $isOutput = match ($op) {
+            'match' => static fn (int $i): bool => $i >= 3 && (1 === $i % 2 || $i === $last),
+            'case' => static fn (int $i): bool => $i >= 2 && (0 === $i % 2 || $i === $last),
+            'interpolate', 'interpolate-hcl', 'interpolate-lab' => static fn (int $i): bool => $i >= 4 && 0 === $i % 2,
+            'step' => static fn (int $i): bool => $i >= 2 && 0 === $i % 2,
+            'coalesce' => null,
+            default => static fn (int $i): bool => $i >= 1,
+        };
+        if (null !== $isOutput) {
+            $out = [];
+            foreach ($value as $i => $entry) {
+                $out[] = $isOutput($i) ? self::sanitizeNumericStyleExpression($entry) : $entry;
             }
 
             return $out;

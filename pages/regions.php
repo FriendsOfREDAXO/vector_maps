@@ -282,7 +282,8 @@ foreach ($allGroups as $group) {
     $area = (float) ($group['area_total_km2'] ?? 0);
     $updated = (string) ($group['updated_at'] ?? '');
 
-    $geojsonUrl = rex_url::backendController([
+    // Frontend-Adresse: die Website lädt das GeoJSON ohne Backend-Boot und ohne Session
+    $geojsonUrl = rex_url::frontendController([
         'rex_api_vector_maps_regions' => 1,
         'action' => 'geojson',
         'key' => $key,

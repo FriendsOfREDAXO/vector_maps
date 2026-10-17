@@ -11,7 +11,7 @@
     },
     "devDependencies": {
         "esbuild": "^0.25.1",
-        "maplibre-gl": "^5.2.0",
-        "pmtiles": "^3.2.1"
+        "maplibre-gl": "~5.24.0",
+        "pmtiles": "^4.5.0"
     }
 }

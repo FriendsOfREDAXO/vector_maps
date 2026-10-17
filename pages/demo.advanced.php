@@ -104,6 +104,65 @@ echo BackendHero::renderCompact(
                 </vectormap>
             </div>
         </div>
+
+        <div class="row" style="margin-bottom:20px">
+            <div class="col-md-8">
+                <h4 style="margin-top:0">7g. Anfahrt: Vollbild, Handy und Karten-Apps</h4>
+                <p class="text-muted" style="font-size:13px;margin-bottom:8px">
+                    <code>fullscreen</code> nimmt den Routenplaner mit ins Vollbild. <code>map-apps</code> ergänzt
+                    „In Karten-App öffnen“ (Google Maps, Apple Karten, OpenStreetMap, Waze). Auf schmalen Karten
+                    (Handy, rechte Spalte) wird der Routenplaner zur einklappbaren Leiste – die schmale Karte rechts zeigt das.
+                </p>
+                <pre style="font-size:11px">&lt;vectormap
+  height="420"
+  route-panel
+  route-to="Friedrich-Alfred-Allee 15, 47055 Duisburg"
+  route-to-locked
+  route-no-steps
+  fullscreen
+  map-apps&gt;
+&lt;/vectormap&gt;</pre>
+                <vectormap
+                    height="420"
+                    route-panel
+                    route-to="Friedrich-Alfred-Allee 15, 47055 Duisburg"
+                    route-to-locked
+                    route-no-steps
+                    fullscreen
+                    map-apps>
+                </vectormap>
+            </div>
+            <div class="col-md-4">
+                <h4 style="margin-top:0">Schmal / Handy</h4>
+                <p class="text-muted" style="font-size:13px;margin-bottom:8px">Gleiche Karte in einer schmalen Spalte – „Route planen“ öffnet das Formular.</p>
+                <div style="max-width:380px">
+                    <vectormap
+                        height="420"
+                        route-panel
+                        route-to="Friedrich-Alfred-Allee 15, 47055 Duisburg"
+                        route-to-locked
+                        route-no-steps
+                        fullscreen
+                        map-apps="google,apple,osm">
+                    </vectormap>
+                </div>
+            </div>
+        </div>
+
+        <div class="row" style="margin-bottom:20px">
+            <div class="col-md-12">
+                <h4 style="margin-top:0">7h. Nur „In Karten-App öffnen“ (ohne Routenplaner)</h4>
+                <p class="text-muted" style="font-size:13px;margin-bottom:8px">Knopf auf der Karte; Ziel aus <code>map-apps-target</code>, sonst erster Marker.</p>
+                <pre style="font-size:11px">&lt;vectormap center="51.4235,6.7765" zoom="15" height="300"
+  markers='[{"lat":51.4235,"lng":6.7765,"popup":"Sportschule Wedau"}]'
+  map-apps="google,apple,osm,waze" map-apps-label="Anfahrt in der Karten-App"&gt;
+&lt;/vectormap&gt;</pre>
+                <vectormap center="51.4235,6.7765" zoom="15" height="300"
+                    markers='[{"lat":51.4235,"lng":6.7765,"popup":"Sportschule Wedau"}]'
+                    map-apps="google,apple,osm,waze" map-apps-label="Anfahrt in der Karten-App">
+                </vectormap>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -410,13 +469,8 @@ if ($vmOmData === null) {
         . '&longitude=' . $vmOmLngs
         . '&current=temperature_2m,weather_code'
         . '&timezone=auto';
-    $vmOmCtx = stream_context_create(['http' => [
-        'timeout' => 5,
-        'ignore_errors' => true,
-        'header' => "User-Agent: REDAXO/5 VectorMaps-Demo\r\n",
-    ]]);
-    $vmOmRaw     = @file_get_contents($vmOmUrl, false, $vmOmCtx);
-    $vmOmDecoded = is_string($vmOmRaw) ? json_decode($vmOmRaw, true) : null;
+    // kurze Zeitlimits, Fehlschlag wird gemerkt (KLXM\VectorMaps\Http) – die Seite hängt nie lange
+    $vmOmDecoded = \KLXM\VectorMaps\Http::getJson($vmOmUrl);
     if (is_array($vmOmDecoded)) {
         // Mehrere Koordinaten → API liefert Array; eine Koordinate → Objekt
         $vmOmResponses = isset($vmOmDecoded[0]) ? $vmOmDecoded : [$vmOmDecoded];
@@ -527,16 +581,10 @@ if (is_file($vmBsCacheFile) && (time() - filemtime($vmBsCacheFile)) < 1800) {
     }
 }
 if ($vmBsMultiData === null) {
-    $vmBsCtx = stream_context_create(['http' => [
-        'timeout' => 5,
-        'ignore_errors' => true,
-        'header' => "User-Agent: REDAXO/5 VectorMaps-Demo\r\n",
-    ]]);
     $vmBsMultiData = [];
     foreach ($vmBsCities as $vmBsCity) {
         $vmBsUrl    = 'https://api.brightsky.dev/current_weather?lat=' . $vmBsCity['lat'] . '&lon=' . $vmBsCity['lon'];
-        $vmBsRaw    = @file_get_contents($vmBsUrl, false, $vmBsCtx);
-        $vmBsParsed = is_string($vmBsRaw) ? json_decode($vmBsRaw, true) : null;
+        $vmBsParsed = \KLXM\VectorMaps\Http::getJson($vmBsUrl);
         if (!is_array($vmBsParsed) || !isset($vmBsParsed['weather'])) {
             continue;
         }

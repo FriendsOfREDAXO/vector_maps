@@ -5,6 +5,56 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [1.3.0] – 2026-10-17
+
+### Gefixt
+
+- **Mehrsprachige Seiten / Karte hängt:** Numerische Style-Ausdrücke wurden bei jedem Aufruf erneut in `['coalesce', …, 0]` eingewickelt – im Browser bei jedem Sprach- oder Stilwechsel, im Proxy bei jedem Cache-Treffer (die Datei wurde dabei zurückgeschrieben und wuchs mit jedem Seitenaufruf).
+  - Die Korrektur ist jetzt idempotent (`vmGuardGets()` bzw. `Proxy::sanitizeNumericStyleExpression()`).
+  - Ältere, mehrfach eingewickelte Cache-Einträge werden beim nächsten Abruf einmal repariert. Den Proxy-Cache musst du dafür nicht leeren.
+  - Außerdem richtig: `['coalesce', ['get','render_height'], ['get','height'], 0]` bleibt so (vorher griff `height` nie), und Bedingungen bzw. Vergleiche (`case`, `match`, `==` …) bleiben unangetastet.
+- **Endlosschleifen bei `styledata`:** Theme und Sprache setzen Eigenschaften nur noch, wenn sich der Wert ändert. Vorher löste jedes Setzen erneut `styledata` aus, und die Karte kam nicht zur Ruhe.
+- **Satellit ↔ Vektor:** GeoJSON wird nicht neu geladen, Marker und Klick-Handler vervielfachen sich nicht mehr. Fläche und Linien kommen nach dem Zurückschalten wieder.
+- **Vollbild:** schaltet das ganze Element in den Vollbildmodus – Routenplaner, Info-Kästen und Buttons sind jetzt auch im Vollbild da. Auf Geräten ohne Element-Vollbild (iPhone) füllt die Karte den Bildschirm per CSS.
+- **Routenplaner auf dem Handy** verdeckte die Karte. Bei schmalen Karten ist er jetzt eine einklappbare Leiste: Sie klappt nach der Berechnung zu, die Routen-Info steht unten. Das Seiten-Layout steht auf schmalen Karten über der Karte.
+- **Eigene Ebenen bei Theme/Sprache:** Cluster-Zahlen und Regionen-Beschriftungen behalten Text und Farbe (vorher bekamen sie Kartennamen bzw. Labelfarben).
+- **Beschriftungs-Filter** von GeoJSON und Regionen mischten alte `$type`-Syntax mit Ausdrücken und wurden von MapLibre verworfen. Jetzt reine Ausdrücke (`geometry-type`).
+- **Aufräumen:**
+  - Entfernte Karten werden aus der Kartenliste genommen; sichtbare Karten werden beim Limit nicht mehr abgebaut.
+  - Globale Listener, Beobachter und offene Abfragen werden beim Entfernen gelöst; nach PJAX werden losgelöste Karten aufgeräumt.
+  - Demo-Timer geben auf, wenn die Karte nie erscheint.
+  - Der Standort-Marker wird verschoben statt neu angelegt.
+  - Die Ladesäulen-Abfrage bricht die vorige ab.
+  - Themes werden je Seite einmal geladen; bei Fehlern wird die Karte trotzdem eingeblendet.
+
+### Sicherheit und Stabilität (PHP)
+
+- **Proxy blockiert PHP nicht mehr:**
+  - Die Session wird sofort freigegeben.
+  - Kurze Zeitlimits, Größenlimit 25 MB.
+  - Nach Ausfällen eines Dienstes 30 s Pause mit sofortiger Antwort (abgelaufene Fassung oder 503).
+  - Atomares Schreiben in den Cache.
+- **Proxy-Cache mit Ablaufzeiten** je Dienst (Kacheln 30 Tage … Wetter 15 Minuten). Abgelaufene Einträge werden neu geholt, bei Fehlern wird die alte Fassung ausgeliefert. Alte Dateien räumt der Proxy schrittweise selbst weg. Browser-Cache passend zur Ablaufzeit.
+- **Style-Korrektur nur für echte Styles** (bis 3 MB, mit `layers`/`sources`): Große GeoJSON-Antworten werden nicht mehr dekodiert.
+- **Weiterleitungen** verfolgt der Proxy selbst und nur zu Zielen auf der Positivliste.
+- **Einstellungen:** Die Cache-Größe wird nur noch auf Knopfdruck berechnet (sonst bei jedem Seitenaufruf über alle Kacheldateien). „Cache leeren“ nur für Admins, mit CSRF-Schutz und ohne die Session zu sperren.
+- **Regionen-API:** keine Session-Sperre, ETag/304, Einbindungscode mit Frontend-Adresse, Speicherung ohne `PRETTY_PRINT`.
+- **Theme-API:** nur mit Recht `vector_maps[]`; Speichern, Löschen und Import mit CSRF-Token. Themes werden je Anfrage einmal gelesen.
+- **Demo-Seite (Wetter):** Abrufe über `KLXM\VectorMaps\Http` mit kurzen Zeitlimits; ein ausgefallener Dienst wird 5 Minuten nicht erneut gefragt.
+
+### Neu
+
+- **„In Karten-App öffnen“** (`map-apps`, optional): Knopf mit Auswahl Google Maps, Apple Karten, OpenStreetMap und Waze.
+  - Mit Routenplaner steht er im Panel und nimmt das Ziel aus dem Feld „Nach“; sonst ist er ein Knopf auf der Karte.
+  - Weitere Attribute: `map-apps-target`, `map-apps-label`, `map-apps-position`.
+
+### Aktualisiert
+
+- PMTiles 3.2 → 4.5.0. Die API (`pmtiles.Protocol`) ist gleich; nicht mehr unterstützt werden PMTiles-v2-Dateien.
+- MapLibre bleibt 5.24.0, die neueste 5er-Version. MapLibre 6 ist nur noch als ES-Modul verfügbar und braucht einen eigenen Umbau (siehe README).
+
+---
+
 ## [1.2.5] – 2026-10-03
 
 ### Geändert

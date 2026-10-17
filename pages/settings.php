@@ -5,10 +5,19 @@ use KLXM\VectorMaps\BackendHero;
 $addon = rex_addon::get('vector_maps');
 
 $func = rex_request('func', 'string', '');
+$csrf = rex_csrf_token::factory('vector_maps_settings');
+if ('' !== $func && !$csrf->isValid()) {
+    echo rex_view::error(rex_i18n::msg('csrf_token_invalid'));
+    $func = '';
+}
 
-// Cache leeren
-if ('clear_cache' === $func) {
-    if (rex_dir::delete(rex_path::addonCache('vector_maps'))) {
+// Cache leeren (nur Admins): erst umbenennen (sofort leer für den Proxy), dann löschen – ohne die Session zu sperren
+if ('clear_cache' === $func && rex::getUser()->isAdmin()) {
+    session_write_close();
+    $cacheDir = rex_path::addonCache('vector_maps');
+    $trash = rtrim($cacheDir, '/') . '-old-' . bin2hex(random_bytes(3));
+    $target = is_dir($cacheDir) && @rename($cacheDir, $trash) ? $trash : $cacheDir;
+    if (rex_dir::delete($target)) {
         echo rex_view::success($addon->i18n('cache_cleared'));
     } else {
         echo rex_view::error($addon->i18n('cache_clear_error'));
@@ -47,11 +56,13 @@ $loadFrontend = (int) $addon->getConfig('load_frontend', 1);
 $extraDomains = (array) $addon->getConfig('proxy_extra_domains', []);
 $extraDomainsText = implode("\n", $extraDomains);
 
-// --- Cache-Größe berechnen ---
+// --- Cache-Größe berechnen: nur auf Knopfdruck (bei vielen Kacheln dauert das) ---
 $cacheDir   = rex_path::addonCache('vector_maps');
 $cacheBytes = 0;
 $cacheFiles = 0;
-if (is_dir($cacheDir)) {
+$cacheMeasured = 'cache_size' === $func;
+if ($cacheMeasured && is_dir($cacheDir)) {
+    session_write_close();
     $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($cacheDir, FilesystemIterator::SKIP_DOTS));
     foreach ($it as $file) {
         if ($file->isFile()) {
@@ -76,13 +87,13 @@ echo BackendHero::render(
     [
         ['value' => $loadFrontend === 1 ? 'Auto' : 'Manuell', 'label' => 'Frontend-Assets'],
         ['value' => (string) count($extraDomains), 'label' => 'Zusatz-Domains'],
-        ['value' => number_format($cacheFiles, 0, ',', '.'), 'label' => 'Cache-Dateien'],
+        ['value' => $cacheMeasured ? number_format($cacheFiles, 0, ',', '.') : '–', 'label' => 'Cache-Dateien'],
     ]
 );
 
 // --- Einstellungsformular ---
 $formContent = '
-<form action="' . rex_url::currentBackendPage(['func' => 'save']) . '" method="post">
+<form action="' . rex_url::currentBackendPage(['func' => 'save']) . '" method="post">' . $csrf->hiddenField() . '
 
     <fieldset>
         <legend>' . $addon->i18n('settings_frontend_heading') . '</legend>
@@ -131,13 +142,21 @@ echo $formFragment->parse('core/page/section.php');
 
 // --- Cache-Bereich ---
 $cacheContent  = '<p>' . $addon->i18n('settings_info') . '</p>';
-$cacheContent .= '<table class="table table-condensed" style="max-width:400px;margin-bottom:16px">'
-    . '<tr><th style="width:160px">Dateien im Cache</th><td>' . number_format($cacheFiles, 0, ',', '.') . '</td></tr>'
-    . '<tr><th>Cache-Größe</th><td><strong>' . $cacheSizeHuman . '</strong></td></tr>'
-    . '</table>';
-$cacheContent .= '<a class="btn btn-default" href="' . rex_url::currentBackendPage(['func' => 'clear_cache']) . '">'
-    . '<i class="rex-icon rex-icon-delete"></i> ' . $addon->i18n('clear_cache')
-    . '</a>';
+if ($cacheMeasured) {
+    $cacheContent .= '<table class="table table-condensed" style="max-width:400px;margin-bottom:16px">'
+        . '<tr><th style="width:160px">Dateien im Cache</th><td>' . number_format($cacheFiles, 0, ',', '.') . '</td></tr>'
+        . '<tr><th>Cache-Größe</th><td><strong>' . $cacheSizeHuman . '</strong></td></tr>'
+        . '</table>';
+}
+$cacheContent .= '<p class="help-block">Kacheln, Schriften und Styles gelten 30 Tage, Adresssuche 1 Tag, Routen 1 Stunde, Wetter 15 Minuten. Dateien, die 60 Tage nicht erneuert wurden, räumt der Proxy nach und nach selbst weg.</p>';
+$cacheContent .= '<a class="btn btn-default" href="' . rex_url::currentBackendPage(['func' => 'cache_size'] + $csrf->getUrlParams()) . '">'
+    . '<i class="rex-icon fa-calculator"></i> Größe ermitteln'
+    . '</a> ';
+if (rex::getUser()->isAdmin()) {
+    $cacheContent .= '<a class="btn btn-default" href="' . rex_url::currentBackendPage(['func' => 'clear_cache'] + $csrf->getUrlParams()) . '" data-confirm="Cache wirklich leeren?">'
+        . '<i class="rex-icon rex-icon-delete"></i> ' . $addon->i18n('clear_cache')
+        . '</a>';
+}
 
 $cacheFragment = new rex_fragment();
 $cacheFragment->setVar('title', '<span class="vm-panel-title--soft"><i class="rex-icon rex-icon-database"></i>Tile-Cache</span>', false);

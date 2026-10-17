@@ -429,7 +429,8 @@ final class RegionGroupManager
             'geojson' => $geojson,
         ];
 
-        $json = json_encode($payloadToStore, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        // ohne PRETTY_PRINT: Geometrien werden sonst um ein Vielfaches größer
+        $json = json_encode($payloadToStore, JSON_UNESCAPED_UNICODE);
 
         return is_string($json)
             && false !== rex_file::put(self::getDir() . '/' . $key . '.json', $json);
@@ -857,6 +858,10 @@ final class RegionGroupManager
 
     public static function serveApi(): void
     {
+        // Öffentlicher Lese-Endpunkt: Session nicht sperren (sonst warten eingeloggte Redakteure)
+        if (PHP_SESSION_ACTIVE === session_status()) {
+            session_write_close();
+        }
         rex_response::cleanOutputBuffers();
 
         $action = rex_request('action', 'string', 'get');
@@ -866,6 +871,19 @@ final class RegionGroupManager
             rex_response::setStatus(rex_response::HTTP_BAD_REQUEST);
             rex_response::sendJson(['error' => 'Missing key']);
             exit;
+        }
+
+        // Unverändert seit dem letzten Abruf: 304 ohne die (große) Datei zu dekodieren
+        $file = self::getDir() . '/' . $key . '.json';
+        if (is_file($file)) {
+            $etag = '"' . md5($key . '|' . $action . '|' . filemtime($file) . '|' . filesize($file)) . '"';
+            rex_response::setHeader('ETag', $etag);
+            rex_response::sendCacheControl('public, max-age=300');
+            if (trim((string) ($_SERVER['HTTP_IF_NONE_MATCH'] ?? '')) === $etag) {
+                rex_response::setStatus(rex_response::HTTP_NOT_MODIFIED);
+                rex_response::sendContent('');
+                exit;
+            }
         }
 
         $item = self::get($key);
