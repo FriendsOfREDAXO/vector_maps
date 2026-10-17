@@ -3,15 +3,11 @@
 Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, alle Dienste über den eigenen Server (Proxy). Mit MapLibre GL JS 6, kostenlosen Kartenstilen (OpenFreeMap, VersaTiles, basemap.de), Routenplaner, Themes und 3D-Gebäuden.
 
 
-![Routenplaner mit Abbiegehinweisen und „In Karten-App öffnen“](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/routenplaner.webp)
+![Routenplaner mit Abbiegehinweisen und „In Karten-App öffnen“](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/routenplaner.webp?raw=true)
 
-| Kostenlose Kartenstile | Theme + 3D-Gebäude |
-|---|---|
-| <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/kartenstile.webp" alt="OpenFreeMap, VersaTiles und basemap.de nebeneinander"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/theme-3d.webp" alt="Theme „REDAXO“ mit 3D-Gebäuden"> |
+![Kostenlose Kartenstile: OpenFreeMap, VersaTiles und basemap.de](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/kartenstile.webp?raw=true)
 
-| Handy: Route | Handy: Formular | Vollbild |
-|---|---|---|
-| <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-route.webp" alt="Handy: eingeklappter Routenplaner mit Route" width="260"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-formular.webp" alt="Handy: aufgeklappter Routenplaner" width="260"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/vollbild.webp" alt="Vollbild mit Routenplaner" width="420"> |
+![Theme „REDAXO“ mit 3D-Gebäuden](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/theme-3d.webp?raw=true)
 
 > Ein AddOn von **[Friends Of REDAXO](https://github.com/FriendsOfREDAXO)** · Maintainer: **Thomas Skerbis** ([@skerbis](https://github.com/skerbis))
 
@@ -657,15 +653,17 @@ Das Routenpanel wird als schwebende Seitenleiste auf der Karte angezeigt und erm
 
 > Das Routenpanel zeigt SVG-Icons für die drei Modi Auto, Zu Fuß und Fahrrad. Es überschreibt `route-from`/`route-to`-Attribute nicht, sondern verwendet sie als Startwerte.
 
-<p><img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-route.webp" alt="Handy: eingeklappte Leiste mit Route" width="240"> <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-formular.webp" alt="Handy: aufgeklapptes Formular" width="240"></p>
+![Handy: eingeklappte Leiste mit Route](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/mobil-route.webp?raw=true) ![Handy: aufgeklapptes Formular](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/mobil-formular.webp?raw=true)
 
 **Auf dem Handy und in schmalen Spalten** (Karte schmaler als 560 px) wird das Panel automatisch zu einer einklappbaren Leiste oben links: Sie startet eingeklappt („Route planen“), klappt nach der Berechnung wieder zu („Route ändern“), und die Routen-Info wandert nach unten. Zoom-Knöpfe und Quellenangabe bleiben frei. Bei `route-panel-layout="side-…"` steht das Panel auf schmalen Karten über der Karte statt daneben.
 
 **Im Vollbild** (`fullscreen`) bleibt das Panel mit allen Funktionen sichtbar.
 
+![Vollbild mit Routenplaner](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/vollbild.webp?raw=true)
+
 ### In Karten-App öffnen (`map-apps`)
 
-![„In Karten-App öffnen“ mit Auswahl Google Maps, Apple Karten, OpenStreetMap, Waze](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/karten-apps.webp)
+![„In Karten-App öffnen“ mit Auswahl Google Maps, Apple Karten, OpenStreetMap, Waze](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/karten-apps.webp?raw=true)
 
 Ein Knopf mit Auswahl übergibt das Ziel an die gängigen Navigations-Apps – auf dem Handy öffnen die Links direkt die App:
 
@@ -728,7 +726,7 @@ Der Nutzer sieht sofort den Ziel-Marker mit Popup. Sobald er seine Startadresse 
 
 ## Kostenlose Kartenstile
 
-![Kostenlose Kartenstile: OpenFreeMap liberty, fiord, dark, VersaTiles colorful, basemap.de und basemap.de mit Relief](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/kartenstile.webp)
+![Kostenlose Kartenstile: OpenFreeMap liberty, fiord, dark, VersaTiles colorful, basemap.de und basemap.de mit Relief](https://github.com/FriendsOfREDAXO/vector_maps/blob/assets/kartenstile.webp?raw=true)
 
 Alle Stile laufen über den REDAXO-Proxy (keine IP-Adressen an Dritte) und brauchen keinen API-Schlüssel:
 
