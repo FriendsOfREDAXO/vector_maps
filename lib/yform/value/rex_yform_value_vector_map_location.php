@@ -1,6 +1,6 @@
 <?php
 
-use KLXM\VectorMaps\Picker\PickerWidget;
+use FriendsOfRedaxo\VectorMaps\Picker\PickerWidget;
 
 class rex_yform_value_vector_map_location extends rex_yform_value_abstract
 {
@@ -50,7 +50,7 @@ class rex_yform_value_vector_map_location extends rex_yform_value_abstract
                     'type' => 'text',
                     'label' => rex_i18n::msg('vector_maps_yform_map_style'),
                     'default' => 'liberty',
-                    'notice' => 'liberty, bright, positron oder satellite',
+                    'notice' => 'liberty, bright, positron, fiord, dark, versatiles-colorful, versatiles-gray, basemap-de, basemap-de-relief … oder satellite',
                 ],
                 'theme' => [
                     'type' => 'text',

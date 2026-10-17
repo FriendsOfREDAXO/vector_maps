@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace KLXM\VectorMaps\Fields;
+namespace FriendsOfRedaxo\VectorMaps\Fields;
 
 use FriendsOfREDAXO\Builder\Fields\FieldAbstract;
-use KLXM\VectorMaps\Picker\PickerWidget;
+use FriendsOfRedaxo\VectorMaps\Picker\PickerWidget;
 
 final class VectorMapPickerField extends FieldAbstract
 {

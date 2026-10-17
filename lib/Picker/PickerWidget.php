@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace KLXM\VectorMaps\Picker;
+namespace FriendsOfRedaxo\VectorMaps\Picker;
 
-use KLXM\VectorMaps\ThemeManager;
+use FriendsOfRedaxo\VectorMaps\ThemeManager;
 use rex_escape;
 use rex_i18n;
 use rex_string;

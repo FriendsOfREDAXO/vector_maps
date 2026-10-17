@@ -1,7 +1,7 @@
 <?php
 
-use KLXM\VectorMaps\BackendHero;
-use KLXM\VectorMaps\ThemeManager;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\ThemeManager;
 
 // Custom-Themes laden
 $customThemes = ThemeManager::getCustomThemes();
@@ -52,6 +52,8 @@ echo BackendHero::render(
                         <option value="liberty" selected>Liberty</option>
                         <option value="bright">Bright</option>
                         <option value="positron">Positron</option>
+                        <option value="fiord">Fiord</option>
+                        <option value="dark">Dark</option>
                     </select>
                     <p class="help-block" style="margin-bottom:0">
                         Das Theme wird auf diesen OFM-Basisstil angewendet.
@@ -219,12 +221,14 @@ echo BackendHero::render(
             $landColor  = rex_escape($colors['land']  ?? '#cccccc');
             $waterColor = rex_escape($colors['water'] ?? '#aaaaaa');
             $baseStyleRaw = (string) ($theme['base_style'] ?? 'liberty');
-            $baseStyle = in_array($baseStyleRaw, ['liberty', 'bright', 'positron'], true) ? $baseStyleRaw : 'liberty';
+            $baseStyle = in_array($baseStyleRaw, \FriendsOfRedaxo\VectorMaps\ThemeManager::BASE_STYLES, true) ? $baseStyleRaw : 'liberty';
             $baseStyleLabel = [
                 'liberty' => 'Liberty',
                 'bright' => 'Bright',
                 'positron' => 'Positron',
-            ][$baseStyle];
+                'fiord' => 'Fiord',
+                'dark' => 'Dark',
+            ][$baseStyle] ?? $baseStyle;
             ?>
             <div class="vm-te-card" data-theme="<?= rex_escape($name) ?>">
                 <div class="vm-te-card-swatch">

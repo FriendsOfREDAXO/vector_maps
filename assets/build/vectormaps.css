@@ -1669,7 +1669,7 @@ vectormap.vm-compact.vm-route-layout-side:fullscreen {
     bottom: 76px !important;
 }
 
-/* Hinweis, wenn die Karte nicht erzeugt werden kann (z. B. ohne WebGL) */
+/* Hinweis, wenn die Karte nicht erzeugt werden kann (z. B. ohne WebGL2) */
 .vm-map-error {
     position: absolute;
     inset: 0;

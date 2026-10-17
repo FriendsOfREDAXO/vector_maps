@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use KLXM\VectorMaps\BackendHero;
-use KLXM\VectorMaps\RegionGroupManager;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\RegionGroupManager;
 
 $addon = rex_addon::get('vector_maps');
 $func = rex_request('func', 'string', '');

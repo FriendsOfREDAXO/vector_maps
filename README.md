@@ -1,12 +1,26 @@
 # Vector Maps – REDAXO AddOn
 
-Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, vollständig selbst 
+Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, alle Dienste über den eigenen Server (Proxy). Mit MapLibre GL JS 6, kostenlosen Kartenstilen (OpenFreeMap, VersaTiles, basemap.de), Routenplaner, Themes und 3D-Gebäuden.
+
+
+![Routenplaner mit Abbiegehinweisen und „In Karten-App öffnen“](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/routenplaner.webp)
+
+| Kostenlose Kartenstile | Theme + 3D-Gebäude |
+|---|---|
+| <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/kartenstile.webp" alt="OpenFreeMap, VersaTiles und basemap.de nebeneinander"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/theme-3d.webp" alt="Theme „REDAXO“ mit 3D-Gebäuden"> |
+
+| Handy: Route | Handy: Formular | Vollbild |
+|---|---|---|
+| <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-route.webp" alt="Handy: eingeklappter Routenplaner mit Route" width="260"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-formular.webp" alt="Handy: aufgeklappter Routenplaner" width="260"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/vollbild.webp" alt="Vollbild mit Routenplaner" width="420"> |
+
+> Ein AddOn von **[Friends Of REDAXO](https://github.com/FriendsOfREDAXO)** · Maintainer: **Thomas Skerbis** ([@skerbis](https://github.com/skerbis))
 
 ---
 
 ## Features
 
-- **Kein API-Key erforderlich** – nutzt [OpenFreeMap](https://openfreemap.org/) (freie Vektorkacheln)
+- **Kein API-Key erforderlich** – freie Vektorkarten von [OpenFreeMap](https://openfreemap.org/), [VersaTiles](https://versatiles.org/) und [basemap.de](https://basemap.de/) (BKG, Deutschland) sowie ESRI-Satellitenbild – siehe [Kostenlose Kartenstile](#kostenlose-kartenstile)
+- **MapLibre GL JS 6** – als ES-Modul eingebunden, Worker vom eigenen Server (WebGL2 erforderlich)
 - **DSGVO-konform** – externer Datenverkehr wird vollständig über einen PHP-Proxy geleitet; Whitelist per Extension Point `VECTOR_MAPS_PROXY_DOMAINS` und Backend-Einstellungen erweiterbar
 - **Web Component** `<vectormap>` – direkt im Template oder Modul verwendbar, kein JavaScript nötig
 - **Lazy-Init + Build-Queue** – WebGL-Kontext wird sequentiell für jede Karte aufgebaut, erst wenn sie in den Viewport scrollt (verhindert Browserlimit von ~10 parallelen WebGL-Kontexten)
@@ -15,7 +29,9 @@ Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, volls
 - **YForm-Integration** – eigenes Value-Feld `vector_map_location` mit Picker, Stil- und Theme-Vorgabe
 - **Builder-Integration** – eigener Feldtyp `vector_map_picker` und Element `Vector Map` für `plain`, `bootstrap` und `uikit`
 - **Routing** – Koordinaten oder Adressen, mit Auto-, Fuß- und Fahrradmodus (OSRM)
-- **Interaktives Routenpanel** – Von/Nach-Adressen direkt auf der Karte eingeben (Autocomplete); GPS-Locate-Button übernimmt den aktuellen Gerätestandort als Startpunkt
+- **Interaktives Routenpanel** – Von/Nach-Adressen direkt auf der Karte eingeben (Autocomplete); GPS-Locate-Button übernimmt den aktuellen Gerätestandort als Startpunkt; auf dem Handy als einklappbare Leiste
+- **In Karten-App öffnen** – optionaler Knopf (`map-apps`) übergibt das Ziel an Google Maps, Apple Karten, OpenStreetMap oder Waze
+- **Vollbild** – das ganze Element samt Routenplaner und Info-Kästen (`fullscreen`), auch auf dem iPhone
 - **Umgebungssuche (nearby)** – POI-Suche via Overpass API (z. B. Ladestationen, Restaurants)
 - **Dynamisches Datennachladen** – GeoJSON-Source per `moveend` aktualisieren (z. B. Ladestationen live aus OSM)
 - **Freie Wetter-APIs** – Open-Meteo und Bright Sky (DWD) via Proxy, kein API-Key, Badge-Marker mit Live-Daten
@@ -23,7 +39,7 @@ Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, volls
 - **Themes** – `dark`, `warm`, `mono` eingebaut, frei erweiterbar via Theme-Editor im Backend; Routing-Linienfarbe im Theme-Editor konfigurierbar; Themes werden per Fetch geladen und erst danach eingeblendet (kein Flash of Unstyled Map)
 - **Theme-Fade-in** – Karte blendet sich sanft ein sobald das Theme geladen ist; Dauer per `theme-transition`-Attribut (ms) steuerbar
 - **3D-Gebäude** – aktivierbar per Attribut
-- **Mehrsprachigkeit** – Sprachcode per `language`-Attribut, steuert Kartenbeschriftungen von OpenFreeMap
+- **Mehrsprachigkeit** – Sprachcode per `language`-Attribut, steuert Kartenbeschriftungen von OpenFreeMap und VersaTiles (basemap.de bleibt deutsch)
 - **Cluster** – automatische Marker-Bündelung bei vielen Punkten
 - **Satellitenbild** – ESRI World Imagery als `map-style="satellite"` oder per `show-satellite` Toggle-Button, kein API-Key (Tiles laufen DSGVO-konform über den Proxy)
 - **maxPitch 60°** – Kamerakippung auf 60° begrenzt (verhindert extreme Perspektiven)
@@ -47,7 +63,7 @@ Frontend-Beispiel:
 <vectormap lat="51.43" lng="6.77" zoom="13" map-style="positron" theme="dark" height="400px"></vectormap>
 ```
 
-`map-style` bestimmt den Basis-Kartenstil (`liberty`, `bright`, `positron`, `satellite` oder ein eigener Theme-Name als Basisstil), `theme` legt zusätzlich eine Farbpalette (`dark`, `redaxo`, `bright`, `warm`, `mono` oder ein selbst im Theme-Editor angelegtes Theme) über diesem Basisstil fest. `satellite` ist ein Rasterbild und unterstützt daher kein Theme.
+`map-style` bestimmt den Basis-Kartenstil (`liberty`, `bright`, `positron`, `fiord`, `dark` (OpenFreeMap), `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark` (VersaTiles), `basemap-de`, `basemap-de-gray`, `basemap-de-relief` (basemap.de, nur Deutschland), `satellite` oder ein eigener Theme-Name als Basisstil), `theme` legt zusätzlich eine Farbpalette (`dark`, `redaxo`, `bright`, `warm`, `mono` oder ein selbst im Theme-Editor angelegtes Theme) über diesem Basisstil fest. `satellite` ist ein Rasterbild und unterstützt daher kein Theme.
 
 ---
 
@@ -69,11 +85,14 @@ Keine weiteren Abhängigkeiten oder Node-Build-Schritte notwendig.
 Nach der Installation lädt das AddOn alle benötigten Assets **automatisch im Frontend** — keine manuelle Einbindung notwendig. Die CSS- und JS-Dateien werden von REDAXO im `<head>` / vor `</body>` ausgegeben:
 
 ```
-maplibre-gl.css        → MapLibre GL JS Kern-Styles
-vectormaps.css         → Web Component Styles + Dark Mode
-maplibre-gl.js         → MapLibre GL JS Kern-Script
-vectormaps.js          → <vectormap> Custom Element
+maplibre-gl.css          → MapLibre GL JS Kern-Styles
+vectormaps.css           → Web Component Styles + Dark Mode
+vectormaps.js            → <vectormap> Custom Element (ES-Modul, lädt MapLibre GL JS 6 selbst)
+maplibre-gl.mjs          → MapLibre GL JS 6 (wird von vectormaps.js importiert)
+maplibre-gl-worker.mjs   → MapLibre-Worker (liegt daneben, wird automatisch gefunden)
 ```
+
+> **Ab Version 2.0 (MapLibre 6):** `vectormaps.js` ist ein ES-Modul und wird mit `<script type="module">` eingebunden. Ein eigenes `maplibre-gl.js` gibt es nicht mehr. `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen stehen weiter global bereit, sobald das Modul geladen ist (Ereignis `vectormaps:ready`, Promise `window.VectorMaps.ready`). MapLibre 6 braucht **WebGL2**; fehlt es, zeigt die Karte einen Hinweis statt einer leeren Fläche.
 
 Danach kann `<vectormap>` direkt in jedem Template, Modul oder Artikel verwendet werden:
 
@@ -104,10 +123,8 @@ $vmAddon = rex_addon::get('vector_maps');
     <!-- Karten-Tags hier platzieren -->
     <vectormap lat="51.43" lng="6.77" zoom="13"></vectormap>
 
-    <!-- MapLibre GL JS Core (defer empfohlen) -->
-    <script defer src="<?= $vmAddon->getAssetsUrl('maplibre/maplibre-gl.js') ?>"></script>
-    <!-- Vector Maps Web Component (defer empfohlen) -->
-    <script defer src="<?= $vmAddon->getAssetsUrl('build/vectormaps.js') ?>"></script>
+    <!-- Vector Maps Web Component – ES-Modul, importiert MapLibre GL JS 6 selbst (Module laden wie defer) -->
+    <script type="module" src="<?= $vmAddon->getAssetsUrl('build/vectormaps.min.js') ?>"></script>
 </body>
 </html>
 ```
@@ -154,7 +171,7 @@ Optional per PHP-Helper:
 
 ```php
 <?php
-echo \KLXM\VectorMaps\Picker\PickerWidget::factory('location')
+echo \FriendsOfRedaxo\VectorMaps\Picker\PickerWidget::factory('location')
     ->setValue('52.520008,13.404954')
     ->setMapStyle('bright')
     ->setTheme('warm')
@@ -197,7 +214,7 @@ Das AddOn registriert ein eigenes Builder-Element `Vector Map` und einen eigenen
 
 Merkmale:
 - Theme-Auswahl direkt im Element
-- Basis-Kartenstil wählbar (`liberty`, `bright`, `positron`, `satellite`)
+- Basis-Kartenstil wählbar (alle [kostenlosen Kartenstile](#kostenlose-kartenstile))
 - Marker + Popup
 - optionales globales Infofenster
 - Controls, Locate, Satellit und Fullscreen
@@ -216,13 +233,37 @@ Für typische Kontaktseiten kann das Element jetzt ohne Sondercode als Anfahrtsk
 
 Damit eignet sich dasselbe Element sowohl für eine einfache Marker-Karte als auch für eine vollwertige Anfahrts- oder Routenkarte.
 
+### Eigener JavaScript-Code mit MapLibre (ab 2.0)
+
+`vectormaps.js` ist ein ES-Modul. Eigene Skripte, die `maplibregl`, `vmProxyUrl()` usw. nutzen, laufen deshalb erst, wenn das Modul geladen ist:
+
+```html
+<!-- einfach: selbst als Modul einbinden – Module laufen in Reihenfolge nach vectormaps.min.js -->
+<script type="module">
+    const map = new maplibregl.Map({ container: 'map', style: vmProxyStyleUrl('liberty'), transformRequest: vmTransformRequest });
+</script>
+
+<!-- oder klassisch: auf das Ereignis warten -->
+<script>
+    document.addEventListener('vectormaps:ready', ({ detail }) => {
+        const map = new detail.maplibregl.Map({ container: 'map', style: detail.vmProxyStyleUrl('liberty') });
+    });
+    // bzw. window.VectorMaps?.ready.then(({ maplibregl }) => { … })
+</script>
+```
+
+Global verfügbar: `maplibregl`, `vmProxyUrl`, `vmProxyStyleUrl`, `vmTransformRequest`, `vmApplyTheme`, `vmLoadAndApplyTheme`, `vmSetLanguage`, `initVectorMap`, `vmDestroyMap`, `VM_BUILT_IN_THEMES`, `VM_OFM_STYLES`, `VM_EXTRA_STYLES` – zusätzlich gesammelt unter `window.VectorMaps`.
+
 ### CSP-Hinweis (Content-Security-Policy)
 
 Falls eine Content-Security-Policy aktiv ist, müssen folgende Direktiven ergänzt werden — **nur** für Seiten mit Karten:
 
 ```
-worker-src blob:;
+worker-src 'self';
+script-src 'self';
 ```
+
+> Ab Version 2.0 (MapLibre 6) liegt der Worker als eigene Datei auf dem Server (`maplibre-gl-worker.mjs`) – `blob:` für `worker-src` ist nicht mehr nötig.
 
 > Alle Tile-Requests laufen über den REDAXO-Proxy (`/?rex_api_vector_maps_proxy=1`), daher sind **keine** externen `connect-src`-Einträge für OpenFreeMap, Nominatim oder OSRM notwendig.
 
@@ -256,7 +297,7 @@ worker-src blob:;
 | `height` | `400` | `height="600px"` | CSS-Höhe des Karten-Containers |
 | `pitch` | `0` | `pitch="45"` | Kamerakippung in Grad (0–60) |
 | `bearing` | `0` | `bearing="45"` | Kartenausrichtung in Grad |
-| `map-style` | `liberty` | `map-style="satellite"` | OFM-Stilname: `liberty`, `bright`, `positron`, `satellite` (ESRI World Imagery) – oder Theme-Name |
+| `map-style` | `liberty` | `map-style="versatiles-colorful"` | Kartenstil (siehe [Kostenlose Kartenstile](#kostenlose-kartenstile)): OpenFreeMap `liberty`, `bright`, `positron`, `fiord`, `dark` · VersaTiles `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark` · basemap.de `basemap-de`, `basemap-de-gray`, `basemap-de-relief` · `satellite` (ESRI World Imagery) – oder Theme-Name bzw. Style-URL |
 | `show-satellite` | `false` | `show-satellite` | Toggle-Button zum Wechsel zwischen Vektor- und Satellitenbild (ESRI World Imagery, kein API-Key) |
 | `theme` | – | `theme="dark"` | Farb-Theme: `dark`, `warm`, `mono` oder eigener Theme-Name |
 | `theme-transition` | `350` | `theme-transition="600"` | Einblend-Dauer in ms nach Theme-Load (0 = sofort, Standard: 350) |
@@ -417,7 +458,7 @@ Drei kurze Copy-Paste-Vorlagen fuer typische Einsaetze.
     height="480"
     route-panel
     route-to="Am Schuermannshuett 40g, 47441 Moers"
-    route-to-popup="<strong>KLXM Crossmedia GmbH</strong><br>klxm.de"
+    route-to-popup="<strong>Musterfirma GmbH</strong><br>Musterstraße 1"
     route-to-locked
     route-mode="driving"
     controls-cluster="left"
@@ -616,11 +657,15 @@ Das Routenpanel wird als schwebende Seitenleiste auf der Karte angezeigt und erm
 
 > Das Routenpanel zeigt SVG-Icons für die drei Modi Auto, Zu Fuß und Fahrrad. Es überschreibt `route-from`/`route-to`-Attribute nicht, sondern verwendet sie als Startwerte.
 
+<p><img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-route.webp" alt="Handy: eingeklappte Leiste mit Route" width="240"> <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-formular.webp" alt="Handy: aufgeklapptes Formular" width="240"></p>
+
 **Auf dem Handy und in schmalen Spalten** (Karte schmaler als 560 px) wird das Panel automatisch zu einer einklappbaren Leiste oben links: Sie startet eingeklappt („Route planen“), klappt nach der Berechnung wieder zu („Route ändern“), und die Routen-Info wandert nach unten. Zoom-Knöpfe und Quellenangabe bleiben frei. Bei `route-panel-layout="side-…"` steht das Panel auf schmalen Karten über der Karte statt daneben.
 
 **Im Vollbild** (`fullscreen`) bleibt das Panel mit allen Funktionen sichtbar.
 
 ### In Karten-App öffnen (`map-apps`)
+
+![„In Karten-App öffnen“ mit Auswahl Google Maps, Apple Karten, OpenStreetMap, Waze](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/karten-apps.webp)
 
 Ein Knopf mit Auswahl übergibt das Ziel an die gängigen Navigations-Apps – auf dem Handy öffnen die Links direkt die App:
 
@@ -671,7 +716,7 @@ Wenn nur `route-to` gesetzt ist (kein `route-from`), wird das Ziel automatisch g
     height="500px"
     route-panel
     route-to="Am Schürmannshütt 40g, 47441 Moers"
-    route-to-popup="<strong>KLXM Crossmedia GmbH</strong><br>klxm.de"
+    route-to-popup="<strong>Musterfirma GmbH</strong><br>Musterstraße 1"
     route-to-locked
     route-mode="driving">
 </vectormap>
@@ -680,6 +725,26 @@ Wenn nur `route-to` gesetzt ist (kein `route-from`), wird das Ziel automatisch g
 Der Nutzer sieht sofort den Ziel-Marker mit Popup. Sobald er seine Startadresse eingibt, wird die Route berechnet.
 
 ---
+
+## Kostenlose Kartenstile
+
+![Kostenlose Kartenstile: OpenFreeMap liberty, fiord, dark, VersaTiles colorful, basemap.de und basemap.de mit Relief](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/kartenstile.webp)
+
+Alle Stile laufen über den REDAXO-Proxy (keine IP-Adressen an Dritte) und brauchen keinen API-Schlüssel:
+
+| Anbieter | `map-style` | Hinweise |
+|---|---|---|
+| [OpenFreeMap](https://openfreemap.org/) | `liberty`, `bright`, `positron`, `fiord`, `dark` | weltweit, OpenStreetMap; Themes, Sprache und 3D-Gebäude voll unterstützt |
+| [VersaTiles](https://versatiles.org/) | `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark` | weltweit, OpenStreetMap, Betrieb in Deutschland; Sprache ja, Themes nur teilweise (anderes Kachel-Schema) |
+| [basemap.de](https://basemap.de/) (BKG) | `basemap-de`, `basemap-de-gray`, `basemap-de-relief` | amtliche Karte, **nur Deutschland**, sehr detailliert; Beschriftung immer deutsch, keine Themes |
+| ESRI World Imagery | `satellite` | Satellitenbild (Raster) |
+
+```html
+<vectormap center="51.43,6.76" zoom="12" map-style="versatiles-colorful"></vectormap>
+<vectormap center="51.43,6.76" zoom="13" map-style="basemap-de-relief"></vectormap>
+```
+
+Die Quellenangaben der Anbieter erscheinen automatisch unten rechts in der Karte.
 
 ## Satellitenbild
 
@@ -929,13 +994,13 @@ Die Einblend-Dauer ist per Attribut steuerbar:
 
 ```html
 <!-- Standard: 350 ms -->
-<vectormap map-style="klxm" height="400px"></vectormap>
+<vectormap map-style="mein-theme" height="400px"></vectormap>
 
 <!-- Langsam: 800 ms -->
-<vectormap map-style="klxm" theme-transition="800" height="400px"></vectormap>
+<vectormap map-style="mein-theme" theme-transition="800" height="400px"></vectormap>
 
 <!-- Sofort (kein Fade): 0 ms -->
-<vectormap map-style="klxm" theme-transition="0" height="400px"></vectormap>
+<vectormap map-style="mein-theme" theme-transition="0" height="400px"></vectormap>
 ```
 
 ---
@@ -1181,6 +1246,8 @@ Alle externen Dienste werden über den internen PHP-Proxy geleitet, sodass keine
 | Dienst | Verwendung |
 |---|---|
 | [OpenFreeMap](https://openfreemap.org/) | Vektorkacheln (Karte) |
+| [VersaTiles](https://versatiles.org/) | Vektorkacheln (Karte, alternative Stile) |
+| [basemap.de](https://basemap.de/) (BKG) | Amtliche Vektorkarte Deutschland, Relief |
 | [Nominatim / OpenStreetMap](https://nominatim.openstreetmap.org/) | Adresssuche (Geocoding) |
 | [OSRM](http://router.project-osrm.org/) | Routing (Fahrt-, Fuß-, Radwege) |
 | [Overpass API](https://overpass-api.de/) | POI-Suche & dynamisches Datennachladen |
@@ -1284,10 +1351,13 @@ vector_maps/
 │   │   ├── vectormaps_i18n.min.js
 │   │   ├── theme-editor.js      # Quelle: Backend Theme-Editor
 │   │   ├── theme-editor.min.js
+│   │   ├── regions-editor.js    # Quelle: Backend Regionen-Builder
+│   │   ├── regions-editor.min.js
 │   │   ├── vectormaps.css       # Quelle: Styles
 │   │   └── vectormaps.min.css   # Minifiziert (vom Build generiert)
 │   └── maplibre/                # Vendor-Assets (von npm kopiert)
-│       ├── maplibre-gl.js       # MapLibre GL JS
+│       ├── maplibre-gl.mjs      # MapLibre GL JS 6 (ES-Modul, von vectormaps.js importiert)
+│       ├── maplibre-gl-worker.mjs # MapLibre-Worker (muss neben maplibre-gl.mjs liegen)
 │       ├── maplibre-gl.css      # MapLibre GL JS Styles
 │       └── pmtiles.js           # PMTiles-Decoder
 ├── build/                       # Build-Tooling (nicht im Release-ZIP)
@@ -1331,7 +1401,7 @@ Erzeugt `*.min.js` / `*.min.css` aus den Quelldateien in `assets/build/`.
 
 ### Vendor-Assets aktualisieren (z. B. neues MapLibre-Release)
 
-> **MapLibre 6:** Ab Version 6 gibt es MapLibre nur noch als ES-Modul (kein `maplibre-gl.js` mit globalem `maplibregl`), dazu WebGL2-Pflicht und weitere Änderungen. `build/package.json` bleibt deshalb bei `~5.24.0`; der Wechsel auf 6 ist ein eigener Umbau.
+> **MapLibre 6:** Das Build-Skript kopiert `maplibre-gl.mjs`, `maplibre-gl-worker.mjs` und `maplibre-gl.css` unverändert (schon minifiziert). Beide `.mjs`-Dateien müssen im selben Ordner liegen. Eine neue Hauptversion von MapLibre vorher mit der Migrationsanleitung prüfen.
 
 ```bash
 cd build
@@ -1367,6 +1437,9 @@ Der Workflow (`release.yml`) installiert npm-Abhängigkeiten, baut alle Assets (
 
 - **[MapLibre GL JS](https://maplibre.org/)** – Open-Source-Kartenbibliothek (BSD-2-Clause)
 - **[OpenFreeMap](https://openfreemap.org/)** – Kostenlose Vektorkacheln ohne API-Key
+- **[VersaTiles](https://versatiles.org/)** – Kostenlose Vektorkacheln, Betrieb in Deutschland
+- **[basemap.de](https://basemap.de/)** – Amtliche Vektorkarte Deutschland (BKG, CC BY 4.0)
+- **[PMTiles](https://github.com/protomaps/PMTiles)** – Einzeldatei-Kachelformat (BSD-3-Clause)
 - **[Nominatim / OSM](https://nominatim.openstreetmap.org/)** – Adress-Geocoding (ODbL)
 - **[OSRM](http://project-osrm.org/)** – Open Source Routing Machine (BSD-2-Clause)
 - **[Overpass API](https://overpass-api.de/)** – OSM-Datenbankabfragen (AGPL)
@@ -1379,4 +1452,6 @@ Der Workflow (`release.yml`) installiert npm-Abhängigkeiten, baut alle Assets (
 
 MIT License – siehe [LICENSE.md](LICENSE.md)
 
-Entwickelt von [KLXM Crossmedia](https://klxm.de)
+Ein AddOn von [Friends Of REDAXO](https://github.com/FriendsOfREDAXO).
+
+**Maintainer:** Thomas Skerbis ([@skerbis](https://github.com/skerbis)) – Fragen, Fehler und Ideen bitte als [Issue](https://github.com/FriendsOfREDAXO/vector_maps/issues).

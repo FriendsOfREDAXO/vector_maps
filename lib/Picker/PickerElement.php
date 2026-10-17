@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace KLXM\VectorMaps\Picker;
+namespace FriendsOfRedaxo\VectorMaps\Picker;
 
 use rex_form_base;
 use rex_form_element;

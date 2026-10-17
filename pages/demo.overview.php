@@ -2,8 +2,8 @@
 // Vektorkarten Demo - Uebersicht & Einbindung
 ?>
 <?php
-use KLXM\VectorMaps\BackendHero;
-use KLXM\VectorMaps\ThemeManager;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\ThemeManager;
 
 // no addon var needed, all text is hardcoded for simplicity
 
@@ -59,9 +59,9 @@ echo BackendHero::render(
                 <div class="alert alert-warning" style="margin:0">
                     <strong>Voraussetzungen</strong>
                     <p style="margin:8px 0 0 0;font-size:13px">
-                        MapLibre GL JS benötigt WebGL-Unterstützung im Browser.
+                        MapLibre GL JS 6 benötigt WebGL2 im Browser.
                         Alle Kacheln (<code>.pbf</code>) werden via REDAXO-Proxy
-                        von OpenFreeMap geladen und gecacht.
+                        von OpenFreeMap, VersaTiles bzw. basemap.de geladen und gecacht.
                     </p>
                 </div>
             </div>
@@ -74,6 +74,11 @@ echo BackendHero::render(
                     <button type="button" class="btn btn-sm btn-primary vm-demo-style-btn active" data-style="liberty">Liberty</button>
                     <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="bright">Bright</button>
                     <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="positron">Positron</button>
+                    <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="fiord">Fiord</button>
+                    <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="dark">Dark</button>
+                    <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="versatiles-colorful" title="VersaTiles – kostenlos, Betrieb in Deutschland">VersaTiles</button>
+                    <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="versatiles-gray">VersaTiles grau</button>
+                    <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="basemap-de" title="basemap.de (BKG) – amtliche Karte, nur Deutschland">basemap.de</button>
                     <button type="button" class="btn btn-sm btn-default vm-demo-style-btn" data-style="satellite" title="ESRI World Imagery &ndash; kein API-Key">&#x1F6F0; Satellit</button>
                 </div>
             </div>
@@ -207,10 +212,8 @@ echo BackendHero::render(
 
   &lt;vectormap lat="51.43" lng="6.77" zoom="13"&gt;&lt;/vectormap&gt;
 
-  &lt;!-- 3. MapLibre GL JS (defer) --&gt;
-  &lt;script defer src="&lt;?= $vmAddon-&gt;getAssetsUrl('maplibre/maplibre-gl.js') ?&gt;"&gt;&lt;/script&gt;
-  &lt;!-- 4. Vector Maps Web Component (defer) --&gt;
-  &lt;script defer src="&lt;?= $vmAddon-&gt;getAssetsUrl('build/vectormaps.js') ?&gt;"&gt;&lt;/script&gt;
+  &lt;!-- 3. Vector Maps Web Component – ES-Modul, l&auml;dt MapLibre GL JS 6 selbst --&gt;
+  &lt;script type="module" src="&lt;?= $vmAddon-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 &lt;/body&gt;
 &lt;/html&gt;</pre>
 

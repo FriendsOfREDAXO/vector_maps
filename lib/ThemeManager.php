@@ -1,6 +1,6 @@
 <?php
 
-namespace KLXM\VectorMaps;
+namespace FriendsOfRedaxo\VectorMaps;
 
 use rex_addon;
 use rex_dir;
@@ -34,7 +34,7 @@ class ThemeManager
     ];
 
     /** Erlaubte OFM-Basisstile für Themes */
-    public const BASE_STYLES = ['liberty', 'bright', 'positron'];
+    public const BASE_STYLES = ['liberty', 'bright', 'positron', 'fiord', 'dark'];
 
     /**
      * Gibt das Themes-Verzeichnis zurück und legt es bei Bedarf an.

@@ -1,7 +1,7 @@
 <?php
 
 use FriendsOfREDAXO\Builder\Starter\StarterConfig;
-use KLXM\VectorMaps\ThemeManager;
+use FriendsOfRedaxo\VectorMaps\ThemeManager;
 
 $config = StarterConfig::class;
 
@@ -10,6 +10,15 @@ $mapStyleChoices = [
     'liberty' => 'Liberty',
     'bright' => 'Bright',
     'positron' => 'Positron',
+    'fiord' => 'Fiord (OpenFreeMap)',
+    'dark' => 'Dark (OpenFreeMap)',
+    'versatiles-colorful' => 'VersaTiles – farbig',
+    'versatiles-gray' => 'VersaTiles – grau',
+    'versatiles-colorful-dark' => 'VersaTiles – farbig, dunkel',
+    'versatiles-gray-dark' => 'VersaTiles – grau, dunkel',
+    'basemap-de' => 'basemap.de (BKG, nur Deutschland)',
+    'basemap-de-gray' => 'basemap.de grau',
+    'basemap-de-relief' => 'basemap.de mit Relief',
     'satellite' => 'Satellite',
 ];
 

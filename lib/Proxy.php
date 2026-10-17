@@ -1,6 +1,6 @@
 <?php
 
-namespace KLXM\VectorMaps;
+namespace FriendsOfRedaxo\VectorMaps;
 
 use rex_addon;
 use rex_extension;
@@ -66,6 +66,11 @@ class Proxy
         $allowedDomains = [
             // OpenFreeMap – Vektorkacheln, Styles, Fonts (Hauptanbieter)
             'https://tiles.openfreemap.org/',
+            // VersaTiles – kostenlose Vektorkarten (OSM, Betrieb in Deutschland)
+            'https://tiles.versatiles.org/',
+            // basemap.de (BKG) – amtliche Vektorkarte Deutschland
+            'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/',
+            'https://sgx.geodatenzentrum.de/wms_basemapde_schummerung',
             // OSM Nominatim – Adresssuche im Picker
             'https://nominatim.openstreetmap.org/',
             // Raw GitHub – statische Länder-Landflächen (GeoJSON)
@@ -183,7 +188,7 @@ class Proxy
             str_contains($host, 'overpass-api.de') => 3600,
             'nominatim.openstreetmap.org' === $host => 86400,
             in_array($host, ['raw.githubusercontent.com', 'github.com', 'www.geoboundaries.org'], true) => 7 * 86400,
-            in_array($host, ['tiles.openfreemap.org', 'api.maptiler.com', 'tiles.stadiamaps.com', 'cdn.protomaps.com',
+            in_array($host, ['tiles.openfreemap.org', 'tiles.versatiles.org', 'sgx.geodatenzentrum.de', 'api.maptiler.com', 'tiles.stadiamaps.com', 'cdn.protomaps.com',
                 'server.arcgisonline.com', 'services.arcgisonline.com'], true),
             str_ends_with($host, 'tile.openstreetmap.org') => 30 * 86400,
             default => 86400,

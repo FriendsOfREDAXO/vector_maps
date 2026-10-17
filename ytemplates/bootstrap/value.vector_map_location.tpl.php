@@ -1,6 +1,6 @@
 <?php
 
-use KLXM\VectorMaps\Picker\PickerWidget;
+use FriendsOfRedaxo\VectorMaps\Picker\PickerWidget;
 
 /** @var rex_yform_value_vector_map_location $this */
 
