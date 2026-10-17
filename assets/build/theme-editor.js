@@ -42,7 +42,11 @@
         route_line:  '#2b7095',
     };
 
-    const BASE_STYLES = ['liberty', 'bright', 'positron', 'fiord', 'dark'];
+    const BASE_STYLES = [
+        'liberty', 'bright', 'positron', 'fiord', 'dark',
+        'versatiles-colorful', 'versatiles-gray', 'versatiles-colorful-dark', 'versatiles-gray-dark',
+        'basemap-de', 'basemap-de-gray', 'basemap-de-relief',
+    ];
 
     let previewMap = null;
 
@@ -63,7 +67,13 @@
     /** Erstellt die MapLibre-Vorschaukarte */
     function initPreviewMap() {
         const container = document.getElementById('vm-te-preview-map');
-        if (!container || typeof maplibregl === 'undefined') return;
+        if (!container) return;
+        // MapLibre wird seit 2.0.1 nachgeladen – bis dahin warten
+        if (typeof maplibregl === 'undefined') {
+            if (window.VectorMaps && window.VectorMaps.ready) window.VectorMaps.ready.then(initPreviewMap);
+            return;
+        }
+        if (previewMap) return;
 
         const selectedBaseStyle = getSelectedBaseStyle();
 

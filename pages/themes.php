@@ -49,14 +49,27 @@ echo BackendHero::render(
                 <div class="form-group">
                     <label for="vm-te-base-style">Basisstil</label>
                     <select id="vm-te-base-style" class="form-control">
-                        <option value="liberty" selected>Liberty</option>
-                        <option value="bright">Bright</option>
-                        <option value="positron">Positron</option>
-                        <option value="fiord">Fiord</option>
-                        <option value="dark">Dark</option>
+                        <optgroup label="OpenFreeMap (weltweit)">
+                            <option value="liberty" selected>Liberty</option>
+                            <option value="bright">Bright</option>
+                            <option value="positron">Positron</option>
+                            <option value="fiord">Fiord</option>
+                            <option value="dark">Dark</option>
+                        </optgroup>
+                        <optgroup label="VersaTiles (weltweit)">
+                            <option value="versatiles-colorful">VersaTiles Colorful</option>
+                            <option value="versatiles-gray">VersaTiles Gray</option>
+                            <option value="versatiles-colorful-dark">VersaTiles Colorful Dark</option>
+                            <option value="versatiles-gray-dark">VersaTiles Gray Dark</option>
+                        </optgroup>
+                        <optgroup label="basemap.de (nur Deutschland)">
+                            <option value="basemap-de">basemap.de Farbe</option>
+                            <option value="basemap-de-gray">basemap.de Grau</option>
+                            <option value="basemap-de-relief">basemap.de Relief</option>
+                        </optgroup>
                     </select>
                     <p class="help-block" style="margin-bottom:0">
-                        Das Theme wird auf diesen OFM-Basisstil angewendet.
+                        Das Theme wird auf diesen Basisstil angewendet.
                     </p>
                 </div>
 
@@ -228,6 +241,13 @@ echo BackendHero::render(
                 'positron' => 'Positron',
                 'fiord' => 'Fiord',
                 'dark' => 'Dark',
+                'versatiles-colorful' => 'VersaTiles Colorful',
+                'versatiles-gray' => 'VersaTiles Gray',
+                'versatiles-colorful-dark' => 'VersaTiles Colorful Dark',
+                'versatiles-gray-dark' => 'VersaTiles Gray Dark',
+                'basemap-de' => 'basemap.de Farbe',
+                'basemap-de-gray' => 'basemap.de Grau',
+                'basemap-de-relief' => 'basemap.de Relief',
             ][$baseStyle] ?? $baseStyle;
             ?>
             <div class="vm-te-card" data-theme="<?= rex_escape($name) ?>">

@@ -851,6 +851,9 @@ const VM_EXTRA_STYLES = {
     'basemap-de-relief':        'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_top.json',
 };
 
+/** Alle Vektorstile, die als Basis für ein Theme taugen (OpenFreeMap, VersaTiles, basemap.de) */
+const VM_THEME_BASES = [...VM_OFM_STYLES, ...Object.keys(VM_EXTRA_STYLES)];
+
 /** Raster-Stile (kein Vektor, kein Sprach-/Theme-Layer) */
 const VM_RASTER_STYLES = ['satellite'];
 
@@ -1007,9 +1010,9 @@ function vmThemeBaseStyleMap() {
  * @returns {string}
  */
 function vmResolveBaseStyle(name) {
-    if (VM_OFM_STYLES.includes(name)) return name;
+    if (VM_THEME_BASES.includes(name)) return name;
     const known = vmThemeBaseStyleMap()[name];
-    return VM_OFM_STYLES.includes(known) ? known : 'liberty';
+    return VM_THEME_BASES.includes(known) ? known : 'liberty';
 }
 
 function vmProxyStyleUrl(nameOrUrl) {
@@ -1021,7 +1024,9 @@ function vmProxyStyleUrl(nameOrUrl) {
         return vmProxyUrl('https://tiles.openfreemap.org/styles/' + nameOrUrl);
     }
     // Theme-Name (eingebaut oder custom) → bekannten Basisstil nutzen statt pauschal Liberty zu laden
-    return vmProxyUrl('https://tiles.openfreemap.org/styles/' + vmResolveBaseStyle(nameOrUrl));
+    const base = vmResolveBaseStyle(nameOrUrl);
+    if (VM_EXTRA_STYLES[base]) return vmProxyUrl(VM_EXTRA_STYLES[base]);
+    return vmProxyUrl('https://tiles.openfreemap.org/styles/' + base);
 }
 
 /** Fonts, die OpenFreeMap tatsächlich hostet */
@@ -1316,6 +1321,32 @@ function vmSetLayout(map, layerId, prop, value) {
  * @param {maplibregl.Map} map
  * @param {Object} colors  — { land, water, green, road_major, road_minor, building, label, label_halo, road_label }
  */
+/**
+ * Ordnet Ebenen der Schemas VersaTiles (Shortbread) und basemap.de den OpenMapTiles-Gruppen zu,
+ * damit Themes auf allen Vektorstilen wirken. Rückgabe: [Gruppe, Ebenen-Kennung für die Muster] –
+ * Gruppe null = Ebene nicht umfärben.
+ */
+const VM_THEME_SL_MAP = {
+    // VersaTiles (Shortbread)
+    ocean: 'water', water_polygons: 'water', water_lines: 'water',
+    land: 'landcover', sites: 'landuse', buildings: 'building', streets: 'transportation',
+    street_polygons: 'aeroway', street_labels: 'transportation_name', boundaries: 'boundary',
+    // basemap.de
+    Gewaesserflaeche: 'water', Gewaesserlinie: 'water', Vegetationsflaeche: 'landcover',
+    Siedlungsflaeche: 'landuse', Grenze_Flaeche: 'park', Grenze_Linie: 'boundary',
+    Gebaeudeflaeche: 'building', Verkehrslinie: 'transportation', Verkehrsflaeche: 'aeroway',
+};
+function vmThemeLayerGroup(layer) {
+    const sl = layer['source-layer'] || '';
+    const id = layer.id || '';
+    if (!(sl in VM_THEME_SL_MAP)) return [sl, id];
+    // Brücken-Deckflächen, Sandbänke und Mittellinien behalten ihre Farbe
+    if (/^Bruecken?_Auf|Mittellinie|Sandbank|Watt|glacier/i.test(id)) return [null, id];
+    // Kontur/Outline als Casing kennzeichnen (Muster unten: case|casing)
+    const lid = id.replace(/:outline$|_Kontur$|^Kontur_|_Kontur_/, (m) => m.replace(/Kontur|outline/, 'casing'));
+    return [VM_THEME_SL_MAP[sl], lid];
+}
+
 function vmApplyTheme(map, colors) {
     if (!colors) return;
     // isStyleLoaded() prueft auch ob Tiles geladen sind -> gibt false waehrend Tiles streamen.
@@ -1328,13 +1359,17 @@ function vmApplyTheme(map, colors) {
     const applyOutlines = colors.customize_outlines !== false;
     for (const layer of layers) {
         const type = layer.type;
-        const sl   = layer['source-layer'] || '';
+        // basemap.de zeichnet den Hintergrund als Fläche
+        if (layer.id === 'Hintergrund' && type === 'fill') { try { vmSetPaint(map, layer.id, 'fill-color', colors.land); } catch (_) {} continue; }
+        const [sl, lid] = vmThemeLayerGroup(layer);
+        if (sl === null) continue;
         try {
             // Eigene Route-Layer (dynamisch via vmAddRoutePanel hinzugefügt)
             if (layer.id === 'vm-route-line') {
                 if (colors.route_line) vmSetPaint(map, layer.id, 'line-color', colors.route_line);
             } else if (type === 'background') {
-                vmSetPaint(map, layer.id, 'background-color', colors.land);
+                // VersaTiles: unsichtbare Platzhalter-Ebenen (slot-*) nicht einfärben
+                if (!layer.id.startsWith('slot-')) vmSetPaint(map, layer.id, 'background-color', colors.land);
             } else if (type === 'symbol' && !sl) {
                 // eigene Beschriftungen (Cluster-Zahlen, Regionen-Labels) behalten ihre Farben
             } else if (type === 'symbol') {
@@ -1366,8 +1401,8 @@ function vmApplyTheme(map, colors) {
                 if (type === 'line' && applyOutlines) vmSetPaint(map, layer.id, 'line-color', parkOutline);
             } else if (sl === 'landcover' || sl === 'landuse') {
                 // 3 Grün-Klassen: dunkles Grün (Wald), helles Grün (Wiesen/Parks), Land (sonstige Landnutzung)
-                const isDark  = /wood|forest|scrub/i.test(layer.id);
-                const isLight = /grass|park|nature|meadow|farm|agri|allot|wetland|crop|orchard|vineyard|garden/i.test(layer.id);
+                const isDark  = /wood|forest|scrub|wald|gehoelz/i.test(lid);
+                const isLight = /grass|park|nature|meadow|farm|agri|allot|wetland|crop|orchard|vineyard|garden|land-vegetation|leisure|burial|gruen|heide|moor|acker|sport|friedhof/i.test(lid);
                 let c;
                 if (isDark)       c = colors.green;
                 else if (isLight) c = colors.farmland !== undefined ? colors.farmland : colors.green;
@@ -1392,9 +1427,9 @@ function vmApplyTheme(map, colors) {
                     try { vmSetPaint(map, layer.id, 'line-color', colors.label); } catch (_) {}
                 }
             } else if (sl === 'transportation') {
-                const isMajor = /motorway|trunk|primary/i.test(layer.id);
-                const isCase  = /case|casing/i.test(layer.id);
-                const isRail  = /rail|transit|subway|tram|light_rail|monorail|funicular/i.test(layer.id);
+                const isMajor = /motorway|trunk|primary|autobahn|bundesstr|landesstr/i.test(lid);
+                const isCase  = /case|casing/i.test(lid);
+                const isRail  = /rail|transit|subway|tram|light_rail|monorail|funicular|bahnstrecke|seilbahn|lift/i.test(lid);
                 if (type === 'line') {
                     if (isCase) {
                         // Casing/Outline-Layer der Straßen — nur wenn customize_outlines aktiv
@@ -1412,7 +1447,10 @@ function vmApplyTheme(map, colors) {
                 }
             } else if (sl === 'building') {
                 const buildingOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : colors.building;
-                if (type === 'fill') {
+                if (type === 'fill' && /casing/.test(lid)) {
+                    // VersaTiles: Umriss als eigene, leicht größere Fläche
+                    if (applyOutlines) vmSetPaint(map, layer.id, 'fill-color', buildingOutline);
+                } else if (type === 'fill') {
                     vmSetPaint(map, layer.id, 'fill-color', colors.building);
                     if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', buildingOutline); } catch (_) {}
                 } else if (type === 'line') {
@@ -1455,7 +1493,7 @@ async function vmLoadAndApplyTheme(map, themeName) {
             colors = data.colors;
             if (typeof data.base_style === 'string') {
                 const candidate = data.base_style.toLowerCase();
-                if (VM_OFM_STYLES.includes(candidate)) baseStyle = candidate;
+                if (VM_THEME_BASES.includes(candidate)) baseStyle = candidate;
             }
         } catch (e) {
             console.warn('<vectormap> Theme-Ladefehler:', e);
@@ -2043,9 +2081,9 @@ function vmBuildMap(el) {
     vmAttachElementApi(el);
     vmObserveDynamicAttributes(el);
     map._vmEl = el;  // Rueckwaerts-Referenz fuer Theme-Fade-in
-    map._vmBaseStyle = mapStyle.startsWith('http') || VM_EXTRA_STYLES[mapStyle] ? mapStyle : vmResolveBaseStyle(mapStyle);
+    map._vmBaseStyle = mapStyle.startsWith('http') ? mapStyle : vmResolveBaseStyle(mapStyle);
     // basemap.de hat keine Namen in anderen Sprachen – Beschriftung nicht umstellen (sonst blieben Felder leer)
-    map._vmNoLanguage = mapStyle.startsWith('basemap-de');
+    map._vmNoLanguage = map._vmBaseStyle.startsWith('basemap-de');
     vmRegisterMap(map);
 
     // Karte erst einblenden wenn Theme angewendet wurde (verhindert Flash of Unstyled Map)
@@ -4074,6 +4112,7 @@ const VM_PUBLIC = {
     VM_BUILT_IN_THEMES,
     VM_OFM_STYLES,
     VM_EXTRA_STYLES,
+    VM_THEME_BASES,
 };
 Object.entries(VM_PUBLIC).forEach(([name, value]) => { if (!(name in window)) window[name] = value; });
 // window.VectorMaps.ready: vom Lader angelegt (dann hier auflösen), sonst direkt erfüllt

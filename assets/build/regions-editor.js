@@ -987,6 +987,10 @@
             }
 
             if (!window.maplibregl) {
+                // MapLibre wird seit 2.0.1 nachgeladen – bis dahin warten
+                if (window.VectorMaps && window.VectorMaps.ready) {
+                    window.VectorMaps.ready.then(initMap);
+                }
                 return;
             }
 

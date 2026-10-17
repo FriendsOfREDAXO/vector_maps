@@ -5,6 +5,21 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [2.0.2] – 2026-10-17
+
+### Gefixt
+
+- **Einstellungen:** Die Seite brach mit „Call to undefined method rex_csrf_token::hiddenField()“ ab. Richtig ist `getHiddenField()` (auch in 1.3.2 behoben).
+- **Theme-Editor und Regionen-Editor zeigten keine Karte:** Seit 2.0.1 wird MapLibre nachgeladen. Beide warten jetzt auf `VectorMaps.ready`.
+
+### Neu
+
+- **Themes auf VersaTiles und basemap.de:** Der Theme-Editor bietet alle Vektorstile als Basisstil an, nicht nur OpenFreeMap.
+  - Die Theme-Farben werden auf die Ebenen des Shortbread-Schemas (VersaTiles) und von basemap.de übertragen.
+  - Das gilt auch für eingebaute Themes: `map-style="versatiles-colorful" theme="dark"`.
+
+---
+
 ## [2.0.1] – 2026-10-17
 
 ### Gefixt
