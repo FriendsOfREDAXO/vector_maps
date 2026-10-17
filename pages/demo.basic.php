@@ -2,7 +2,7 @@
 // Grundkarten, Marker, Routing - Beispiele 1-6
 ?>
 <?php
-use KLXM\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
 
 echo BackendHero::renderCompact(
     'basic',

@@ -5,6 +5,35 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [2.0.0] – 2026-10-17
+
+### ⚠️ Umstellungen (Breaking Changes)
+
+- **MapLibre GL JS 6.14** (vorher 5.24). MapLibre 6 gibt es nur noch als ES-Modul:
+  - `vectormaps.js` ist jetzt ein ES-Modul und importiert MapLibre selbst (`assets/maplibre/maplibre-gl.mjs` + `maplibre-gl-worker.mjs`). Das AddOn bindet es automatisch mit `<script type="module">` ein (Frontend und Backend).
+  - `maplibre-gl.js` entfällt. Wer die Assets **manuell** einbindet, ersetzt beide Skript-Zeilen durch `<script type="module" src="…/build/vectormaps.min.js"></script>` (siehe README).
+  - `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen bleiben global verfügbar, sobald das Modul geladen ist: Ereignis `vectormaps:ready`, Promise `window.VectorMaps.ready`. Eigene klassische Skripte, die sofort beim Laden darauf zugreifen, müssen darauf warten oder als `type="module"` laufen.
+  - MapLibre 6 braucht **WebGL2**. Ohne WebGL2 zeigt die Karte einen Hinweis; die übrigen Karten werden weiter aufgebaut.
+  - CSP: `worker-src blob:` ist nicht mehr nötig, der Worker liegt als eigene Datei auf dem Server.
+- **Friends Of REDAXO:** Das AddOn wird jetzt von Friends Of REDAXO gepflegt.
+  - Namespace `KLXM\VectorMaps` → `FriendsOfRedaxo\VectorMaps`. Der alte Namespace funktioniert über einen Alias weiter (z. B. `KLXM\VectorMaps\Picker\PickerWidget`), bitte im eigenen Code umstellen.
+  - Autor und Supportseite: https://github.com/FriendsOfREDAXO/vector_maps
+
+### Neu
+
+- **Weitere kostenlose Kartenstile ohne API-Schlüssel**, alle über den Proxy:
+  - OpenFreeMap: `fiord`, `dark`.
+  - VersaTiles: `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark`.
+  - basemap.de (BKG, nur Deutschland): `basemap-de`, `basemap-de-gray`, `basemap-de-relief`.
+  - Auswahl auch im Builder-Element, in der Demo und im Koordinaten-Picker. Theme-Basisstile um `fiord` und `dark` erweitert.
+
+### Geändert
+
+- Fehlende Sprite-Icons über `setMissingStyleImageResolver` (MapLibre 6).
+- Demo-Code für eigene MapLibre-Karten auf MapLibre 6 (Modul) umgestellt.
+
+---
+
 ## [1.3.0] – 2026-10-17
 
 ### Gefixt

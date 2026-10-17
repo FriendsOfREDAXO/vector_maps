@@ -2,7 +2,7 @@
 // Umgebungssuche - Beispiele 7a, 7b
 ?>
 <?php
-use KLXM\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
 
 echo BackendHero::renderCompact(
     'nearby',

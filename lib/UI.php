@@ -1,6 +1,6 @@
 <?php
 
-namespace KLXM\VectorMaps;
+namespace FriendsOfRedaxo\VectorMaps;
 
 use rex_i18n;
 

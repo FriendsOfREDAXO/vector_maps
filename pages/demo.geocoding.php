@@ -2,7 +2,7 @@
 // Geocoding, Picker und Integrationen
 ?>
 <?php
-use KLXM\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
 
 echo BackendHero::renderCompact(
     'geocoding',
@@ -67,14 +67,14 @@ echo BackendHero::renderCompact(
                 <h4 style="margin-top:0">2. PHP-Helper</h4>
                 <p class="text-muted" style="font-size:13px">Für Backend- oder Frontend-Formulare kann der Picker direkt per PHP erzeugt werden.</p>
                 <pre style="font-size:12px">&lt;?php
-echo \KLXM\VectorMaps\Picker\PickerWidget::factory('location')
+echo \FriendsOfRedaxo\VectorMaps\Picker\PickerWidget::factory('location')
     -&gt;setValue('52.520008,13.404954')
     -&gt;setMapStyle('bright')
     -&gt;setTheme('warm')
     -&gt;parse();</pre>
 
                 <div class="well well-sm" style="margin-bottom:10px">
-                    <?= \KLXM\VectorMaps\Picker\PickerWidget::factory('vm_demo_php_picker', 'vm-demo-php-picker')
+                    <?= \FriendsOfRedaxo\VectorMaps\Picker\PickerWidget::factory('vm_demo_php_picker', 'vm-demo-php-picker')
                         ->setValue('50.110924,8.682127')
                         ->setMapStyle('positron')
                         ->setTheme('redaxo')

@@ -1667,3 +1667,16 @@ vectormap.vm-compact.vm-route-layout-side:fullscreen {
     top: auto !important;
     bottom: 76px !important;
 }
+
+/* Hinweis, wenn die Karte nicht erzeugt werden kann (z. B. ohne WebGL2) */
+.vm-map-error {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: #f1f4f7;
+    color: #1f2933;
+    font: 14px/1.4 system-ui, -apple-system, sans-serif;
+    text-align: center;
+}

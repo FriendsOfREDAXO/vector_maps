@@ -91,9 +91,12 @@ async function buildOwnAssets() {
  * [npm-Paket/Pfad, Zieldateiname, minifizieren?]
  */
 const vendorFiles = [
-    ['maplibre-gl/dist/maplibre-gl.js',  'maplibre-gl.js',  true],
-    ['maplibre-gl/dist/maplibre-gl.css', 'maplibre-gl.css', true],
-    ['pmtiles/dist/pmtiles.js',          'pmtiles.js',       true],
+    // MapLibre 6: nur noch ES-Module (Haupt- und Worker-Datei, schon minifiziert) – der Worker liegt neben
+    // maplibre-gl.mjs und wird von dort über import.meta.url gefunden
+    ['maplibre-gl/dist/maplibre-gl.mjs',        'maplibre-gl.mjs',        false],
+    ['maplibre-gl/dist/maplibre-gl-worker.mjs', 'maplibre-gl-worker.mjs', false],
+    ['maplibre-gl/dist/maplibre-gl.css',        'maplibre-gl.css',        true],
+    ['pmtiles/dist/pmtiles.js',                 'pmtiles.js',             true],
 ];
 
 function removeSourceMapReference(file) {

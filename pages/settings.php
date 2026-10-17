@@ -1,6 +1,6 @@
 <?php
 
-use KLXM\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
 
 $addon = rex_addon::get('vector_maps');
 

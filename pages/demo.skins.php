@@ -2,7 +2,7 @@
 // Design-Skins & UI-Styling Demos
 ?>
 <?php
-use KLXM\VectorMaps\BackendHero;
+use FriendsOfRedaxo\VectorMaps\BackendHero;
 
 echo BackendHero::renderCompact(
     'skins',

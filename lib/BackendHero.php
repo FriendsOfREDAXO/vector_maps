@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace KLXM\VectorMaps;
+namespace FriendsOfRedaxo\VectorMaps;
 
 use rex_addon;
 use rex_url;

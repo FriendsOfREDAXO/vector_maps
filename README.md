@@ -69,11 +69,14 @@ Keine weiteren Abhängigkeiten oder Node-Build-Schritte notwendig.
 Nach der Installation lädt das AddOn alle benötigten Assets **automatisch im Frontend** — keine manuelle Einbindung notwendig. Die CSS- und JS-Dateien werden von REDAXO im `<head>` / vor `</body>` ausgegeben:
 
 ```
-maplibre-gl.css        → MapLibre GL JS Kern-Styles
-vectormaps.css         → Web Component Styles + Dark Mode
-maplibre-gl.js         → MapLibre GL JS Kern-Script
-vectormaps.js          → <vectormap> Custom Element
+maplibre-gl.css          → MapLibre GL JS Kern-Styles
+vectormaps.css           → Web Component Styles + Dark Mode
+vectormaps.js            → <vectormap> Custom Element (ES-Modul, lädt MapLibre GL JS 6 selbst)
+maplibre-gl.mjs          → MapLibre GL JS 6 (wird von vectormaps.js importiert)
+maplibre-gl-worker.mjs   → MapLibre-Worker (liegt daneben, wird automatisch gefunden)
 ```
+
+> **Ab Version 2.0 (MapLibre 6):** `vectormaps.js` ist ein ES-Modul und wird mit `<script type="module">` eingebunden. Ein eigenes `maplibre-gl.js` gibt es nicht mehr. `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen stehen weiter global bereit, sobald das Modul geladen ist (Ereignis `vectormaps:ready`, Promise `window.VectorMaps.ready`). MapLibre 6 braucht **WebGL2**; fehlt es, zeigt die Karte einen Hinweis statt einer leeren Fläche.
 
 Danach kann `<vectormap>` direkt in jedem Template, Modul oder Artikel verwendet werden:
 
@@ -104,10 +107,8 @@ $vmAddon = rex_addon::get('vector_maps');
     <!-- Karten-Tags hier platzieren -->
     <vectormap lat="51.43" lng="6.77" zoom="13"></vectormap>
 
-    <!-- MapLibre GL JS Core (defer empfohlen) -->
-    <script defer src="<?= $vmAddon->getAssetsUrl('maplibre/maplibre-gl.js') ?>"></script>
-    <!-- Vector Maps Web Component (defer empfohlen) -->
-    <script defer src="<?= $vmAddon->getAssetsUrl('build/vectormaps.js') ?>"></script>
+    <!-- Vector Maps Web Component – ES-Modul, importiert MapLibre GL JS 6 selbst (Module laden wie defer) -->
+    <script type="module" src="<?= $vmAddon->getAssetsUrl('build/vectormaps.min.js') ?>"></script>
 </body>
 </html>
 ```
@@ -154,7 +155,7 @@ Optional per PHP-Helper:
 
 ```php
 <?php
-echo \KLXM\VectorMaps\Picker\PickerWidget::factory('location')
+echo \FriendsOfRedaxo\VectorMaps\Picker\PickerWidget::factory('location')
     ->setValue('52.520008,13.404954')
     ->setMapStyle('bright')
     ->setTheme('warm')
@@ -216,13 +217,37 @@ Für typische Kontaktseiten kann das Element jetzt ohne Sondercode als Anfahrtsk
 
 Damit eignet sich dasselbe Element sowohl für eine einfache Marker-Karte als auch für eine vollwertige Anfahrts- oder Routenkarte.
 
+### Eigener JavaScript-Code mit MapLibre (ab 2.0)
+
+`vectormaps.js` ist ein ES-Modul. Eigene Skripte, die `maplibregl`, `vmProxyUrl()` usw. nutzen, laufen deshalb erst, wenn das Modul geladen ist:
+
+```html
+<!-- einfach: selbst als Modul einbinden – Module laufen in Reihenfolge nach vectormaps.min.js -->
+<script type="module">
+    const map = new maplibregl.Map({ container: 'map', style: vmProxyStyleUrl('liberty'), transformRequest: vmTransformRequest });
+</script>
+
+<!-- oder klassisch: auf das Ereignis warten -->
+<script>
+    document.addEventListener('vectormaps:ready', ({ detail }) => {
+        const map = new detail.maplibregl.Map({ container: 'map', style: detail.vmProxyStyleUrl('liberty') });
+    });
+    // bzw. window.VectorMaps?.ready.then(({ maplibregl }) => { … })
+</script>
+```
+
+Global verfügbar: `maplibregl`, `vmProxyUrl`, `vmProxyStyleUrl`, `vmTransformRequest`, `vmApplyTheme`, `vmLoadAndApplyTheme`, `vmSetLanguage`, `initVectorMap`, `vmDestroyMap`, `VM_BUILT_IN_THEMES`, `VM_OFM_STYLES`, `VM_EXTRA_STYLES` – zusätzlich gesammelt unter `window.VectorMaps`.
+
 ### CSP-Hinweis (Content-Security-Policy)
 
 Falls eine Content-Security-Policy aktiv ist, müssen folgende Direktiven ergänzt werden — **nur** für Seiten mit Karten:
 
 ```
-worker-src blob:;
+worker-src 'self';
+script-src 'self';
 ```
+
+> Ab Version 2.0 (MapLibre 6) liegt der Worker als eigene Datei auf dem Server (`maplibre-gl-worker.mjs`) – `blob:` für `worker-src` ist nicht mehr nötig.
 
 > Alle Tile-Requests laufen über den REDAXO-Proxy (`/?rex_api_vector_maps_proxy=1`), daher sind **keine** externen `connect-src`-Einträge für OpenFreeMap, Nominatim oder OSRM notwendig.
 
@@ -256,7 +281,7 @@ worker-src blob:;
 | `height` | `400` | `height="600px"` | CSS-Höhe des Karten-Containers |
 | `pitch` | `0` | `pitch="45"` | Kamerakippung in Grad (0–60) |
 | `bearing` | `0` | `bearing="45"` | Kartenausrichtung in Grad |
-| `map-style` | `liberty` | `map-style="satellite"` | OFM-Stilname: `liberty`, `bright`, `positron`, `satellite` (ESRI World Imagery) – oder Theme-Name |
+| `map-style` | `liberty` | `map-style="versatiles-colorful"` | Kartenstil (siehe [Kostenlose Kartenstile](#kostenlose-kartenstile)): OpenFreeMap `liberty`, `bright`, `positron`, `fiord`, `dark` · VersaTiles `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark` · basemap.de `basemap-de`, `basemap-de-gray`, `basemap-de-relief` · `satellite` (ESRI World Imagery) – oder Theme-Name bzw. Style-URL |
 | `show-satellite` | `false` | `show-satellite` | Toggle-Button zum Wechsel zwischen Vektor- und Satellitenbild (ESRI World Imagery, kein API-Key) |
 | `theme` | – | `theme="dark"` | Farb-Theme: `dark`, `warm`, `mono` oder eigener Theme-Name |
 | `theme-transition` | `350` | `theme-transition="600"` | Einblend-Dauer in ms nach Theme-Load (0 = sofort, Standard: 350) |
@@ -680,6 +705,24 @@ Wenn nur `route-to` gesetzt ist (kein `route-from`), wird das Ziel automatisch g
 Der Nutzer sieht sofort den Ziel-Marker mit Popup. Sobald er seine Startadresse eingibt, wird die Route berechnet.
 
 ---
+
+## Kostenlose Kartenstile
+
+Alle Stile laufen über den REDAXO-Proxy (keine IP-Adressen an Dritte) und brauchen keinen API-Schlüssel:
+
+| Anbieter | `map-style` | Hinweise |
+|---|---|---|
+| [OpenFreeMap](https://openfreemap.org/) | `liberty`, `bright`, `positron`, `fiord`, `dark` | weltweit, OpenStreetMap; Themes, Sprache und 3D-Gebäude voll unterstützt |
+| [VersaTiles](https://versatiles.org/) | `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark` | weltweit, OpenStreetMap, Betrieb in Deutschland; Sprache ja, Themes nur teilweise (anderes Kachel-Schema) |
+| [basemap.de](https://basemap.de/) (BKG) | `basemap-de`, `basemap-de-gray`, `basemap-de-relief` | amtliche Karte, **nur Deutschland**, sehr detailliert; Beschriftung immer deutsch, keine Themes |
+| ESRI World Imagery | `satellite` | Satellitenbild (Raster) |
+
+```html
+<vectormap center="51.43,6.76" zoom="12" map-style="versatiles-colorful"></vectormap>
+<vectormap center="51.43,6.76" zoom="13" map-style="basemap-de-relief"></vectormap>
+```
+
+Die Quellenangaben der Anbieter erscheinen automatisch unten rechts in der Karte.
 
 ## Satellitenbild
 
@@ -1181,6 +1224,8 @@ Alle externen Dienste werden über den internen PHP-Proxy geleitet, sodass keine
 | Dienst | Verwendung |
 |---|---|
 | [OpenFreeMap](https://openfreemap.org/) | Vektorkacheln (Karte) |
+| [VersaTiles](https://versatiles.org/) | Vektorkacheln (Karte, alternative Stile) |
+| [basemap.de](https://basemap.de/) (BKG) | Amtliche Vektorkarte Deutschland, Relief |
 | [Nominatim / OpenStreetMap](https://nominatim.openstreetmap.org/) | Adresssuche (Geocoding) |
 | [OSRM](http://router.project-osrm.org/) | Routing (Fahrt-, Fuß-, Radwege) |
 | [Overpass API](https://overpass-api.de/) | POI-Suche & dynamisches Datennachladen |
@@ -1331,7 +1376,7 @@ Erzeugt `*.min.js` / `*.min.css` aus den Quelldateien in `assets/build/`.
 
 ### Vendor-Assets aktualisieren (z. B. neues MapLibre-Release)
 
-> **MapLibre 6:** Ab Version 6 gibt es MapLibre nur noch als ES-Modul (kein `maplibre-gl.js` mit globalem `maplibregl`), dazu WebGL2-Pflicht und weitere Änderungen. `build/package.json` bleibt deshalb bei `~5.24.0`; der Wechsel auf 6 ist ein eigener Umbau.
+> **MapLibre 6:** Das Build-Skript kopiert `maplibre-gl.mjs`, `maplibre-gl-worker.mjs` und `maplibre-gl.css` unverändert (schon minifiziert). Beide `.mjs`-Dateien müssen im selben Ordner liegen. Eine neue Hauptversion von MapLibre vorher mit der Migrationsanleitung prüfen.
 
 ```bash
 cd build
@@ -1379,4 +1424,4 @@ Der Workflow (`release.yml`) installiert npm-Abhängigkeiten, baut alle Assets (
 
 MIT License – siehe [LICENSE.md](LICENSE.md)
 
-Entwickelt von [KLXM Crossmedia](https://klxm.de)
+Ein AddOn von [Friends Of REDAXO](https://github.com/FriendsOfREDAXO) – ursprünglich entwickelt von [KLXM Crossmedia](https://klxm.de).

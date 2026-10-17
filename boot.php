@@ -1,6 +1,6 @@
 <?php
 
-namespace KLXM\VectorMaps;
+namespace FriendsOfRedaxo\VectorMaps;
 
 use rex;
 use rex_addon;
@@ -9,6 +9,17 @@ use rex_extension;
 use rex_path;
 use rex_view;
 use rex_request;
+
+// Alter Namespace (bis 1.x: KLXM\VectorMaps) bleibt als Alias nutzbar – eigener Projekt-Code bricht nicht
+spl_autoload_register(static function (string $class): void {
+    $old = 'KLXM\\VectorMaps\\';
+    if (str_starts_with($class, $old)) {
+        $new = 'FriendsOfRedaxo\\VectorMaps\\' . substr($class, strlen($old));
+        if (class_exists($new)) {
+            class_alias($new, $class);
+        }
+    }
+});
 
 // API Intercept for the Vector Maps Proxy
 if (rex_request('rex_api_vector_maps_proxy', 'int', 0) === 1) {
@@ -40,7 +51,7 @@ if (rex_addon::get('builder')->isAvailable()) {
     require_once __DIR__ . '/lib/Fields/VectorMapPickerField.php';
 
     if (class_exists(\FriendsOfREDAXO\Builder\Fields\FieldRegistry::class)) {
-        $fieldClass = 'KLXM\\VectorMaps\\Fields\\VectorMapPickerField';
+        $fieldClass = 'FriendsOfRedaxo\\VectorMaps\\Fields\\VectorMapPickerField';
         if (class_exists($fieldClass)) {
             /** @var \FriendsOfREDAXO\Builder\Fields\FieldInterface $field */
             $field = new $fieldClass();
@@ -94,12 +105,15 @@ if (rex::isBackend() && rex::getUser()) {
     };
     rex_view::addCssFile($vmVer('build/vector_maps_backend.css'));
     rex_view::addCssFile($vmVer('build/vectormaps.css'));
-    // Zuerst MapLibre Core laden
     rex_view::addCssFile($vmVer('maplibre/maplibre-gl.css'));
-    rex_view::addJsFile($vmVer('maplibre/maplibre-gl.js'));
-    // Dann unsere Custom Scripts
     rex_view::addJsFile($vmVer('build/vectormaps_i18n.js'));
-    rex_view::addJsFile($vmVer('build/vectormaps.js'));
+    // vectormaps.js ist ein ES-Modul (importiert MapLibre 6) – rex_view kennt kein type="module", daher per OUTPUT_FILTER
+    $vmModule = $vmVer('build/vectormaps.js');
+    rex_extension::register('OUTPUT_FILTER', static function (\rex_extension_point $ep) use ($vmModule): string {
+        $tag = '<script type="module" src="' . rex_escape($vmModule) . '"></script>';
+
+        return str_replace('</body>', $tag . '</body>', (string) $ep->getSubject());
+    });
 
     // Theme-Editor-Script nur auf der Themes-Seite laden
     if (rex_be_controller::getCurrentPage() === 'vector_maps/themes') {
@@ -145,9 +159,8 @@ if (!rex::isBackend()) {
             $themeBaseStyles = json_encode(ThemeManager::getBaseStyleMap(), JSON_UNESCAPED_UNICODE);
             $js  = '<script>window.VM_THEME_BASE_STYLES = ' . $themeBaseStyles . ";</script>
 "
-                 . '<script defer src="' . $vmFe('maplibre/maplibre-gl.js') . "\"></script>
-"
-                 . '<script defer src="' . $vmFe('build/vectormaps.js') . "\"></script>
+                 // ES-Modul (importiert MapLibre 6 selbst, Worker liegt daneben) – Module laden wie defer
+                 . '<script type="module" src="' . $vmFe('build/vectormaps.js') . "\"></script>
 ";
             $subject = str_replace('</head>', $css . '</head>', $subject);
             $subject = str_replace('</body>', $js . '</body>', $subject);

@@ -1,3 +1,15 @@
+/*
+ * vector_maps – ES-Modul (MapLibre GL JS 6 gibt es nur noch als ES-Modul).
+ * Einbinden: <script type="module" src=".../build/vectormaps.min.js"></script> – MapLibre wird hier importiert,
+ * der Worker (maplibre-gl-worker.mjs) liegt daneben und wird automatisch gefunden.
+ * Für bestehenden Code (Theme-Editor, Regionen, eigene Skripte mit maplibregl/vmProxyUrl) stellt das Modul
+ * window.maplibregl und die bisherigen Funktionen weiter global bereit (siehe Ende der Datei); fertig ist das,
+ * sobald window.VectorMaps.ready erfüllt ist bzw. das Ereignis „vectormaps:ready“ kam.
+ */
+import * as maplibregl from '../maplibre/maplibre-gl.mjs';
+
+if (!window.maplibregl) window.maplibregl = maplibregl;
+
 // Upstream-Noisefilter: MapLibre kann bei manchen OFM-Styles wiederholt
 // "Expected value to be of type number, but found null instead." loggen.
 // Das ist aktuell ein bekanntes, nicht-funktionales Warnrauschen im Worker-Pfad.
@@ -82,6 +94,8 @@ class VectorMapPicker {
                         <button type="button" class="btn btn-xs btn-primary vm-style-btn active" data-style="liberty">Liberty</button>
                         <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="bright">Bright</button>
                         <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="positron">Positron</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="versatiles-colorful">VersaTiles</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="basemap-de">basemap.de</button>
                         <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="satellite">Satellit</button>
                     </div>
                     <label class="vm-theme-select-wrap" for="vm-picker-theme-select">
@@ -406,17 +420,12 @@ class VectorMapPicker {
     }
 
     proxyStyleUrl(styleName) {
-        if (styleName === 'satellite') return VM_SATELLITE_STYLE;
-        return this.proxyUrl('https://tiles.openfreemap.org/styles/' + styleName);
+        // alle bekannten Stile (OpenFreeMap, VersaTiles, basemap.de, Satellit) wie bei <vectormap>
+        return vmProxyStyleUrl(styleName);
     }
 
     createTransformRequest() {
-        return (url, resourceType) => {
-            if (url.includes('tiles.openfreemap.org/')) {
-                return { url: this.proxyUrl(url) };
-            }
-            return { url };
-        };
+        return (url) => vmTransformRequest(url);
     }
 
     initPickerMap(input) {
@@ -638,9 +647,7 @@ class VectorMapPicker {
         map.addControl(new maplibregl.NavigationControl());
 
         // Fehlende Sprite-Icons stumm ignorieren (verhindert Console-Spam)
-        map.on('styleimagemissing', (e) => {
-            if (!map.hasImage(e.id)) map.addImage(e.id, { width: 1, height: 1, data: new Uint8ClampedArray(4) });
-        });
+        vmIgnoreMissingImages(map);
 
         const add3dBuildings = () => {
             if (map.getLayer('3d-buildings')) return;
@@ -782,7 +789,9 @@ class VectorMapPicker {
    Attribute:
      center="lat,lng"           Kartenmittelpunkt (Standard: Deutschland-Mitte)
      zoom="6"                   Zoom-Stufe
-     map-style="liberty"        Stil: liberty|bright|positron|satellite oder vollständige URL
+     map-style="liberty"        Stil: liberty|bright|positron|fiord|dark (OpenFreeMap), versatiles-colorful|-gray|
+                                -colorful-dark|-gray-dark (VersaTiles), basemap-de|-gray|-relief (BKG, nur DE),
+                                satellite oder vollständige Style-URL
      pitch="0"                  Kamerakippung (0–85°)
      bearing="0"                Kameraausrichtung
      height="400"               Höhe in px (oder "60vh", "100%" usw.)
@@ -823,7 +832,23 @@ class VectorMapPicker {
    ============================================================================= */
 
 /** Bekannte OpenFreeMap-Stil-Namen (werden direkt an OFM weitergeleitet) */
-const VM_OFM_STYLES = ['liberty', 'bright', 'positron'];
+const VM_OFM_STYLES = ['liberty', 'bright', 'positron', 'fiord', 'dark'];
+/**
+ * Weitere kostenlose Vektorkarten ohne API-Schlüssel (Name → Style-URL, alles über den REDAXO-Proxy):
+ *  - VersaTiles (versatiles.org, Betrieb in Deutschland, OpenStreetMap-Daten, Shortbread-Schema)
+ *  - basemap.de (BKG, amtliche Karte – nur Deutschland, Beschriftung deutsch)
+ * Sprache und Themes sind auf OpenMapTiles-Stile (OpenFreeMap) abgestimmt; VersaTiles übernimmt die Sprache
+ * (name_xx), basemap.de bleibt deutsch.
+ */
+const VM_EXTRA_STYLES = {
+    'versatiles-colorful':      'https://tiles.versatiles.org/assets/styles/colorful/style.json',
+    'versatiles-gray':          'https://tiles.versatiles.org/assets/styles/gray/style.json',
+    'versatiles-colorful-dark': 'https://tiles.versatiles.org/assets/styles/colorful-dark/style.json',
+    'versatiles-gray-dark':     'https://tiles.versatiles.org/assets/styles/gray-dark/style.json',
+    'basemap-de':               'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_col.json',
+    'basemap-de-gray':          'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_gry.json',
+    'basemap-de-relief':        'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_top.json',
+};
 
 /** Raster-Stile (kein Vektor, kein Sprach-/Theme-Layer) */
 const VM_RASTER_STYLES = ['satellite'];
@@ -989,6 +1014,7 @@ function vmResolveBaseStyle(name) {
 function vmProxyStyleUrl(nameOrUrl) {
     if (nameOrUrl === 'satellite') return VM_SATELLITE_STYLE;
     if (nameOrUrl.startsWith('http')) return vmProxyUrl(nameOrUrl);
+    if (VM_EXTRA_STYLES[nameOrUrl]) return vmProxyUrl(VM_EXTRA_STYLES[nameOrUrl]);
     // Bekannte OFM-Styles direkt weiterleiten
     if (VM_OFM_STYLES.includes(nameOrUrl)) {
         return vmProxyUrl('https://tiles.openfreemap.org/styles/' + nameOrUrl);
@@ -1014,6 +1040,8 @@ function vmTransformRequest(url) {
     }
     const proxied = [
         'tiles.openfreemap.org/',
+        'tiles.versatiles.org/',
+        'sgx.geodatenzentrum.de/',
         'api.maptiler.com/',
         'tiles.stadiamaps.com/',
         'cdn.protomaps.com/',
@@ -1476,7 +1504,10 @@ async function vmLoadAndApplyTheme(map, themeName) {
  * @param {string} lang  — ISO-639-1 (z. B. 'de', 'en', 'fr')
  */
 function vmSetLanguage(map, lang) {
-    if (!lang || !map.isStyleLoaded()) return;
+    if (!lang || !map.isStyleLoaded() || map._vmNoLanguage) return;
+    // basemap.de (auch nach Stilwechsel in Demo/Picker): nur deutsche Namen – Beschriftung nicht umstellen
+    const sources = map.getStyle().sources || {};
+    if (Object.values(sources).some((src) => String(src.url || (src.tiles || [])[0] || '').includes('geodatenzentrum'))) return;
     // Zeilentrennzeichen: bei Linien/Highways Leerzeichen, sonst Zeilenumbruch
     const sepLine  = ' ';
     const sepOther = '\n';
@@ -1919,9 +1950,33 @@ function vmDrainBuildQueue() {
     if (VM_BUILD_QUEUE.length === 0) { VM_BUILD_RUNNING = false; return; }
     VM_BUILD_RUNNING = true;
     const el = VM_BUILD_QUEUE.shift();
-    vmBuildMap(el);
+    // ein Fehler bei einer Karte (z. B. kein WebGL2) darf die übrigen nicht aufhalten
+    try { vmBuildMap(el); } catch (err) { vmShowMapError(el, err); }
     // 150 ms Pause zwischen Maps — WebGL-Context sauber aufgebaut
     setTimeout(vmDrainBuildQueue, 150);
+}
+
+/**
+ * Fehlende Sprite-Icons durch ein leeres 1×1-Bild ersetzen (verhindert Console-Spam).
+ * MapLibre 6: Bilder liefert setMissingStyleImageResolver (styleimagemissing meldet nur noch).
+ */
+function vmIgnoreMissingImages(map) {
+    const blank = (id) => { if (!map.hasImage(id)) map.addImage(id, { width: 1, height: 1, data: new Uint8ClampedArray(4) }); };
+    if (typeof map.setMissingStyleImageResolver === 'function') map.setMissingStyleImageResolver(blank);
+    else map.on('styleimagemissing', (e) => blank(e.id));
+}
+
+/** Statt einer leeren Fläche: Hinweis, warum die Karte fehlt (MapLibre 6 braucht WebGL2) */
+function vmShowMapError(el, err) {
+    console.warn('<vectormap> Karte konnte nicht erzeugt werden:', err);
+    const gpu = err && (err.name === 'GPUInitializationError' || /webgl/i.test(String(err.message || '')));
+    const box = document.createElement('div');
+    box.className = 'vm-map-error';
+    box.setAttribute('role', 'note');
+    box.textContent = gpu
+        ? 'Die Karte kann in diesem Browser nicht angezeigt werden (WebGL2 wird benötigt).'
+        : 'Die Karte konnte nicht geladen werden.';
+    (el._vmMapContainer || el).appendChild(box);
 }
 
 function vmBuildMap(el) {
@@ -1955,7 +2010,7 @@ function vmBuildMap(el) {
         || (document.documentElement.lang || navigator.language || 'de').slice(0, 2);
     // Theme: 'theme'-Attribut ODER map-style falls kein bekannter OFM-Stil und kein Raster-Stil
     const isRaster    = VM_RASTER_STYLES.includes(mapStyle);
-    const isThemeStyle = !isRaster && !VM_OFM_STYLES.includes(mapStyle) && !mapStyle.startsWith('http');
+    const isThemeStyle = !isRaster && !VM_OFM_STYLES.includes(mapStyle) && !VM_EXTRA_STYLES[mapStyle] && !mapStyle.startsWith('http');
     const activeTheme  = el.getAttribute('theme') || (isThemeStyle ? mapStyle : null);
 
     // Karten-Container
@@ -1987,7 +2042,9 @@ function vmBuildMap(el) {
     vmAttachElementApi(el);
     vmObserveDynamicAttributes(el);
     map._vmEl = el;  // Rueckwaerts-Referenz fuer Theme-Fade-in
-    map._vmBaseStyle = mapStyle.startsWith('http') ? mapStyle : vmResolveBaseStyle(mapStyle);
+    map._vmBaseStyle = mapStyle.startsWith('http') || VM_EXTRA_STYLES[mapStyle] ? mapStyle : vmResolveBaseStyle(mapStyle);
+    // basemap.de hat keine Namen in anderen Sprachen – Beschriftung nicht umstellen (sonst blieben Felder leer)
+    map._vmNoLanguage = mapStyle.startsWith('basemap-de');
     vmRegisterMap(map);
 
     // Karte erst einblenden wenn Theme angewendet wurde (verhindert Flash of Unstyled Map)
@@ -1999,9 +2056,7 @@ function vmBuildMap(el) {
     }
 
     // Fehlende Sprite-Icons stumm ignorieren (verhindert Console-Spam)
-    map.on('styleimagemissing', (e) => {
-        if (!map.hasImage(e.id)) map.addImage(e.id, { width: 1, height: 1, data: new Uint8ClampedArray(4) });
-    });
+    vmIgnoreMissingImages(map);
 
     if (!el.hasAttribute('no-navigation')) {
         map.addControl(new maplibregl.NavigationControl(), controlsPos);
@@ -3996,3 +4051,27 @@ if (document.readyState === 'loading') {
 } else {
     new VectorMapPicker();
 }
+
+
+/* ---------- Globale API (Kompatibilität mit Skripten ohne Modul) ---------- */
+
+const VM_PUBLIC = {
+    maplibregl,
+    initVectorMap,
+    vmApplyTheme,
+    vmLoadAndApplyTheme,
+    vmSetLanguage,
+    vmProxyUrl,
+    vmProxyStyleUrl,
+    vmTransformRequest,
+    vmWrapGetWithCoalesce,
+    vmWrapAnyGetWithCoalesce,
+    vmFixExtrusionLayers,
+    vmDestroyMap,
+    VM_BUILT_IN_THEMES,
+    VM_OFM_STYLES,
+    VM_EXTRA_STYLES,
+};
+Object.entries(VM_PUBLIC).forEach(([name, value]) => { if (!(name in window)) window[name] = value; });
+window.VectorMaps = Object.assign(window.VectorMaps || {}, VM_PUBLIC, { ready: Promise.resolve(VM_PUBLIC) });
+document.dispatchEvent(new CustomEvent('vectormaps:ready', { detail: VM_PUBLIC }));

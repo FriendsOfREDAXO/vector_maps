@@ -42,7 +42,7 @@
         route_line:  '#2b7095',
     };
 
-    const BASE_STYLES = ['liberty', 'bright', 'positron'];
+    const BASE_STYLES = ['liberty', 'bright', 'positron', 'fiord', 'dark'];
 
     let previewMap = null;
 
