@@ -986,6 +986,8 @@ Fünf eingebaute Themes stehen sofort zur Verfügung:
 
 Eigene Themes können im Backend unter **Vector Maps → Themes** angelegt und live per Theme-Editor konfiguriert werden. Die **Routing-Linienfarbe** (`route_line`) lässt sich ebenfalls pro Theme einstellen.
 
+Als **Basisstil** eines Themes stehen alle Vektorstile zur Wahl: OpenFreeMap (`liberty`, `bright`, `positron`, `fiord`, `dark`), VersaTiles (`versatiles-colorful`, `-gray`, `-colorful-dark`, `-gray-dark`) und basemap.de (`basemap-de`, `-gray`, `-relief`, nur Deutschland). Die Theme-Farben werden auf die Ebenen jedes Stils übertragen (Wasser, Grün, Straßen, Gebäude, Beschriftung …), ab 2.0.2.
+
 ### Theme-Fade-in
 
 Bei Karten mit einem Theme (`theme="..."` oder `map-style="<eigener-name>"`) bleibt die Karte zunächst unsichtbar und blendet sich sanft ein, sobald das Theme vollständig geladen und angewendet wurde. Das verhindert das kurze Aufblitzen des ungestylten Grundstils ("Flash of Unstyled Map").

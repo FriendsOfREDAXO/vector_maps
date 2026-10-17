@@ -34,7 +34,11 @@ class ThemeManager
     ];
 
     /** Erlaubte OFM-Basisstile für Themes */
-    public const BASE_STYLES = ['liberty', 'bright', 'positron', 'fiord', 'dark'];
+    public const BASE_STYLES = [
+        'liberty', 'bright', 'positron', 'fiord', 'dark',
+        'versatiles-colorful', 'versatiles-gray', 'versatiles-colorful-dark', 'versatiles-gray-dark',
+        'basemap-de', 'basemap-de-gray', 'basemap-de-relief',
+    ];
 
     /**
      * Gibt das Themes-Verzeichnis zurück und legt es bei Bedarf an.
