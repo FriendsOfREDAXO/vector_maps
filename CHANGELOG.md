@@ -5,6 +5,15 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [1.3.1] – 2026-10-17
+
+### Gefixt
+
+- **Routenplaner auf dem Handy:** Bei vorgegebener Route (`route-from` + `route-to`) startete die Leiste ausgeklappt mit allen Abbiegehinweisen und verdeckte die Karte; die Routen-Info lag darüber. Sie startet jetzt eingeklappt („Route ändern“), klappt nach der automatischen Berechnung zu und liegt aufgeklappt über der Routen-Info.
+- **Eine fehlerhafte Karte hält die anderen nicht mehr auf:** Scheitert das Anlegen einer Karte (z. B. ohne WebGL), zeigt sie einen Hinweis; die übrigen Karten werden weiter aufgebaut. Vorher blieb die Aufbau-Warteschlange stehen.
+
+---
+
 ## [1.3.0] – 2026-10-17
 
 ### Gefixt

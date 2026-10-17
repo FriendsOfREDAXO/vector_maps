@@ -1919,9 +1919,23 @@ function vmDrainBuildQueue() {
     if (VM_BUILD_QUEUE.length === 0) { VM_BUILD_RUNNING = false; return; }
     VM_BUILD_RUNNING = true;
     const el = VM_BUILD_QUEUE.shift();
-    vmBuildMap(el);
+    // ein Fehler bei einer Karte (z. B. kein WebGL) darf die übrigen nicht aufhalten
+    try { vmBuildMap(el); } catch (err) { vmShowMapError(el, err); }
     // 150 ms Pause zwischen Maps — WebGL-Context sauber aufgebaut
     setTimeout(vmDrainBuildQueue, 150);
+}
+
+/** Statt einer leeren Fläche: Hinweis, warum die Karte fehlt */
+function vmShowMapError(el, err) {
+    console.warn('<vectormap> Karte konnte nicht erzeugt werden:', err);
+    const gpu = /webgl/i.test(String((err && err.message) || ''));
+    const box = document.createElement('div');
+    box.className = 'vm-map-error';
+    box.setAttribute('role', 'note');
+    box.textContent = gpu
+        ? 'Die Karte kann in diesem Browser nicht angezeigt werden (WebGL wird benötigt).'
+        : 'Die Karte konnte nicht geladen werden.';
+    (el._vmMapContainer || el).appendChild(box);
 }
 
 function vmBuildMap(el) {
@@ -2746,7 +2760,8 @@ function vmAddRoutePanel(el, map) {
         requestAnimationFrame(() => { try { map.resize(); } catch (_) { /* */ } });
     };
     toggleBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('vm-rp-collapsed')));
-    if (isCompact() && !(initFrom && initTo)) setCollapsed(true);
+    // schmale Karte: immer eingeklappt starten – bei vorgegebener Route mit „Route ändern“
+    if (isCompact()) setCollapsed(true, initFrom && initTo ? 'Route ändern' : undefined);
     const clearBtn  = panel.querySelector('.vm-rp-clear');
     const locateBtn = panel.querySelector('.vm-rp-locate');
     let currentMode = initMode;
@@ -2878,6 +2893,7 @@ function vmAddRoutePanel(el, map) {
             await vmDrawRoute(el, map, initFrom, initTo, currentMode);
             if (!noSteps) vmRenderSteps(panel, el._vmRouteSteps, map);
             clearBtn.style.display = '';
+            if (isCompact()) setCollapsed(true, 'Route ändern');
         };
         if (map.isStyleLoaded()) {
             autoCalc();
