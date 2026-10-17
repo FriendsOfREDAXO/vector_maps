@@ -1465,6 +1465,7 @@ vectormap.vm-fs-pseudo .vm-map-pane {
 }
 
 .vm-compact .vm-route-panel:not(.vm-route-panel--side) {
+    z-index: 11;   /* aufgeklappt über der Routen-Info */
     top: 8px !important;
     right: 58px !important;
     bottom: auto !important;
@@ -1666,4 +1667,17 @@ vectormap.vm-compact.vm-route-layout-side:fullscreen {
 .vm-compact .vm-route-badge {
     top: auto !important;
     bottom: 76px !important;
+}
+
+/* Hinweis, wenn die Karte nicht erzeugt werden kann (z. B. ohne WebGL) */
+.vm-map-error {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: #f1f4f7;
+    color: #1f2933;
+    font: 14px/1.4 system-ui, -apple-system, sans-serif;
+    text-align: center;
 }
