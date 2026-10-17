@@ -40,7 +40,7 @@ echo BackendHero::renderCompact(
                         <tr><td><code>zoom</code></td><td><code>6</code></td><td><code>zoom="14"</code></td><td>Anfangs-Zoom-Stufe (1–22)</td></tr>
                         <tr><td><code>min-zoom</code></td><td><code>0</code></td><td><code>min-zoom="5"</code></td><td>Minimaler Zoom-Level (Benutzer kann nicht weiter herauszoomen)</td></tr>
                         <tr><td><code>max-zoom</code></td><td><code>22</code></td><td><code>max-zoom="18"</code></td><td>Maximaler Zoom-Level (Benutzer kann nicht weiter hineinzoomen)</td></tr>
-                        <tr><td><code>map-style</code></td><td><code>liberty</code></td><td><code>map-style="satellite"</code></td><td>Stil: <code>liberty</code> | <code>bright</code> | <code>positron</code> | <code>satellite</code> (ESRI World Imagery) oder gespeicherter Theme-Name</td></tr>
+                        <tr><td><code>map-style</code></td><td><code>liberty</code></td><td><code>map-style="satellite"</code></td><td>Stil: OpenFreeMap <code>liberty</code> | <code>bright</code> | <code>positron</code> | <code>fiord</code> | <code>dark</code> &middot; VersaTiles <code>versatiles-colorful</code> | <code>versatiles-gray</code> | <code>versatiles-colorful-dark</code> | <code>versatiles-gray-dark</code> &middot; basemap.de <code>basemap-de</code> | <code>basemap-de-gray</code> | <code>basemap-de-relief</code> (nur Deutschland) &middot; <code>satellite</code> (ESRI World Imagery) oder gespeicherter Theme-Name &ndash; alle ohne API-Key, &uuml;ber den Proxy</td></tr>
                         <tr><td><code>show-satellite</code></td><td><code>false</code></td><td><code>show-satellite</code></td><td>Satellitenbild-Toggle-Button einblenden (ESRI World Imagery, kein API-Key, Boolean-Attribut)</td></tr>
                         <tr><td><code>height</code></td><td><code>400</code></td><td><code>height="60vh"</code></td><td>Höhe in px, vh, % …</td></tr>
                         <tr><td><code>pitch</code></td><td><code>0</code></td><td><code>pitch="60"</code></td><td>Kamerakippung 0–85°</td></tr>
@@ -351,6 +351,28 @@ echo BackendHero::renderCompact(
                 <p class="text-muted" style="font-size:12px;margin-top:4px">Fliegt zum Eiffelturm sobald die Karte in den Viewport scrollt (25&thinsp;% sichtbar + 1,2&thinsp;s Delay) &mdash; interaktionslos, für Hintergrundkarten.</p>
             </div>
             <div class="col-md-6"></div>
+        </div>
+
+        <div class="row" style="margin-bottom:8px">
+            <div class="col-md-12">
+                <h4 style="margin-top:0">7. Kostenlose Kartenstile <span class="label label-success">map-style</span></h4>
+                <p class="text-muted" style="font-size:13px">Alle ohne API-Key, &uuml;ber den REDAXO-Proxy (keine IP-Adressen an Dritte). Die Quellenangabe des Anbieters steht automatisch unten rechts.</p>
+                <pre style="font-size:12px">&lt;vectormap center="51.4310,6.7620" zoom="13" map-style="versatiles-colorful"&gt;&lt;/vectormap&gt;
+&lt;vectormap center="51.4310,6.7620" zoom="13" map-style="basemap-de-relief"&gt;&lt;/vectormap&gt;</pre>
+            </div>
+            <?php foreach ([
+                'fiord' => 'OpenFreeMap &bdquo;fiord&ldquo;',
+                'dark' => 'OpenFreeMap &bdquo;dark&ldquo;',
+                'versatiles-colorful' => 'VersaTiles &bdquo;colorful&ldquo; (Betrieb in Deutschland)',
+                'versatiles-gray' => 'VersaTiles &bdquo;gray&ldquo;',
+                'basemap-de' => 'basemap.de (BKG, amtlich, nur Deutschland)',
+                'basemap-de-relief' => 'basemap.de mit Relief',
+            ] as $vmStyle => $vmStyleLabel): ?>
+            <div class="col-md-4" style="margin-bottom:12px">
+                <p style="margin:0 0 4px;font-weight:600;font-size:13px"><?= $vmStyleLabel ?> &middot; <code><?= rex_escape($vmStyle) ?></code></p>
+                <vectormap center="51.4310,6.7620" zoom="13" height="220" map-style="<?= rex_escape($vmStyle) ?>"></vectormap>
+            </div>
+            <?php endforeach ?>
         </div>
 
     </div>

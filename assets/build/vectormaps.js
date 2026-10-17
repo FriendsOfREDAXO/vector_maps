@@ -988,7 +988,7 @@ function vmProxyUrl(url) {
 }
 
 /**
- * Server-seitig mitgegebene Basisstil-Zuordnung für Custom-Themes (Name → liberty|bright|positron).
+ * Server-seitig mitgegebene Basisstil-Zuordnung für Custom-Themes (Name → liberty|bright|positron|fiord|dark).
  * Wird per boot.php sowohl im Backend (rex.vector_maps_theme_base_styles) als auch im
  * Frontend (window.VM_THEME_BASE_STYLES) injiziert.
  * @returns {Record<string, string>}

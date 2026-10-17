@@ -1072,6 +1072,8 @@ map.on('moveend', async () => {
 
         <ul class="nav nav-tabs" role="tablist" style="margin-bottom:0">
             <li role="presentation" class="active"><a href="#vmt-tab-ofm"   data-toggle="tab">OpenFreeMap&nbsp;<span class="label label-success">kostenlos</span></a></li>
+            <li role="presentation"><a href="#vmt-tab-versatiles"           data-toggle="tab">VersaTiles&nbsp;<span class="label label-success">kostenlos</span></a></li>
+            <li role="presentation"><a href="#vmt-tab-basemapde"            data-toggle="tab">basemap.de&nbsp;<span class="label label-success">kostenlos</span></a></li>
             <li role="presentation"><a href="#vmt-tab-maptiler"             data-toggle="tab">MapTiler Cloud</a></li>
             <li role="presentation"><a href="#vmt-tab-pmtiles"              data-toggle="tab">Protomaps/PMTiles</a></li>
             <li role="presentation"><a href="#vmt-tab-stadia"               data-toggle="tab">Stadia Maps</a></li>
@@ -1113,11 +1115,45 @@ const map = new maplibregl.Map({
     }
 });
 
-// Verfügbare Styles: liberty | bright | positron
+// Verfügbare Styles: liberty | bright | positron | fiord | dark
 &lt;/script&gt;</code></pre>
                 <p class="text-muted" style="margin-top:8px;font-size:12px">
-                    Styles: <code>liberty</code>, <code>bright</code>, <code>positron</code> &middot;
+                    Styles: <code>liberty</code>, <code>bright</code>, <code>positron</code>, <code>fiord</code>, <code>dark</code> &middot;
                     <a href="https://openfreemap.org" target="_blank" rel="noopener">openfreemap.org</a>
+                </p>
+            </div>
+
+            <!-- VersaTiles -->
+            <div role="tabpanel" class="tab-pane" id="vmt-tab-versatiles">
+                <h4 style="margin-top:0">VersaTiles via REDAXO-Proxy <small class="text-success">Kein API-Key · Betrieb in Deutschland</small></h4>
+                <p>VersaTiles liefert freie Vektorkacheln aus OpenStreetMap-Daten (Shortbread-Schema), betrieben in Deutschland. Im Tag einfach per <code>map-style</code>:</p>
+                <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;vectormap center="51.43,6.76" zoom="12" map-style="versatiles-colorful"&gt;&lt;/vectormap&gt;
+
+// eigene MapLibre-Karte (nach vectormaps.min.js als Modul):
+&lt;script type="module"&gt;
+const map = new maplibregl.Map({
+    container: 'map',
+    style: vmProxyStyleUrl('versatiles-gray'),   // bzw. VM_EXTRA_STYLES['versatiles-gray'] als Original-URL
+    transformRequest: vmTransformRequest,
+});
+&lt;/script&gt;</code></pre>
+                <p class="text-muted" style="margin-top:8px;font-size:12px">
+                    Styles: <code>versatiles-colorful</code>, <code>versatiles-gray</code>, <code>versatiles-colorful-dark</code>, <code>versatiles-gray-dark</code> &middot;
+                    Sprache wie bei OpenFreeMap, Themes nur teilweise &middot;
+                    <a href="https://versatiles.org" target="_blank" rel="noopener">versatiles.org</a>
+                </p>
+            </div>
+
+            <!-- basemap.de -->
+            <div role="tabpanel" class="tab-pane" id="vmt-tab-basemapde">
+                <h4 style="margin-top:0">basemap.de (BKG) via REDAXO-Proxy <small class="text-success">Kein API-Key · amtlich · nur Deutschland</small></h4>
+                <p>Die amtliche Vektorkarte von Bund und Ländern – sehr detailliert (Hausnummern, Haltestellen), Lizenz CC BY 4.0. Die Beschriftung ist immer deutsch.</p>
+                <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;vectormap center="51.43,6.76" zoom="14" map-style="basemap-de"&gt;&lt;/vectormap&gt;
+&lt;vectormap center="51.43,6.76" zoom="14" map-style="basemap-de-gray"&gt;&lt;/vectormap&gt;
+&lt;vectormap center="51.43,6.76" zoom="12" map-style="basemap-de-relief"&gt;&lt;/vectormap&gt;</code></pre>
+                <p class="text-muted" style="margin-top:8px;font-size:12px">
+                    Außerhalb Deutschlands bleibt die Karte leer &middot;
+                    <a href="https://basemap.de" target="_blank" rel="noopener">basemap.de</a>
                 </p>
             </div>
 

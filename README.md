@@ -6,7 +6,8 @@ Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, volls
 
 ## Features
 
-- **Kein API-Key erforderlich** – nutzt [OpenFreeMap](https://openfreemap.org/) (freie Vektorkacheln)
+- **Kein API-Key erforderlich** – freie Vektorkarten von [OpenFreeMap](https://openfreemap.org/), [VersaTiles](https://versatiles.org/) und [basemap.de](https://basemap.de/) (BKG, Deutschland) sowie ESRI-Satellitenbild – siehe [Kostenlose Kartenstile](#kostenlose-kartenstile)
+- **MapLibre GL JS 6** – als ES-Modul eingebunden, Worker vom eigenen Server (WebGL2 erforderlich)
 - **DSGVO-konform** – externer Datenverkehr wird vollständig über einen PHP-Proxy geleitet; Whitelist per Extension Point `VECTOR_MAPS_PROXY_DOMAINS` und Backend-Einstellungen erweiterbar
 - **Web Component** `<vectormap>` – direkt im Template oder Modul verwendbar, kein JavaScript nötig
 - **Lazy-Init + Build-Queue** – WebGL-Kontext wird sequentiell für jede Karte aufgebaut, erst wenn sie in den Viewport scrollt (verhindert Browserlimit von ~10 parallelen WebGL-Kontexten)
@@ -15,7 +16,9 @@ Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, volls
 - **YForm-Integration** – eigenes Value-Feld `vector_map_location` mit Picker, Stil- und Theme-Vorgabe
 - **Builder-Integration** – eigener Feldtyp `vector_map_picker` und Element `Vector Map` für `plain`, `bootstrap` und `uikit`
 - **Routing** – Koordinaten oder Adressen, mit Auto-, Fuß- und Fahrradmodus (OSRM)
-- **Interaktives Routenpanel** – Von/Nach-Adressen direkt auf der Karte eingeben (Autocomplete); GPS-Locate-Button übernimmt den aktuellen Gerätestandort als Startpunkt
+- **Interaktives Routenpanel** – Von/Nach-Adressen direkt auf der Karte eingeben (Autocomplete); GPS-Locate-Button übernimmt den aktuellen Gerätestandort als Startpunkt; auf dem Handy als einklappbare Leiste
+- **In Karten-App öffnen** – optionaler Knopf (`map-apps`) übergibt das Ziel an Google Maps, Apple Karten, OpenStreetMap oder Waze
+- **Vollbild** – das ganze Element samt Routenplaner und Info-Kästen (`fullscreen`), auch auf dem iPhone
 - **Umgebungssuche (nearby)** – POI-Suche via Overpass API (z. B. Ladestationen, Restaurants)
 - **Dynamisches Datennachladen** – GeoJSON-Source per `moveend` aktualisieren (z. B. Ladestationen live aus OSM)
 - **Freie Wetter-APIs** – Open-Meteo und Bright Sky (DWD) via Proxy, kein API-Key, Badge-Marker mit Live-Daten
@@ -23,7 +26,7 @@ Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, volls
 - **Themes** – `dark`, `warm`, `mono` eingebaut, frei erweiterbar via Theme-Editor im Backend; Routing-Linienfarbe im Theme-Editor konfigurierbar; Themes werden per Fetch geladen und erst danach eingeblendet (kein Flash of Unstyled Map)
 - **Theme-Fade-in** – Karte blendet sich sanft ein sobald das Theme geladen ist; Dauer per `theme-transition`-Attribut (ms) steuerbar
 - **3D-Gebäude** – aktivierbar per Attribut
-- **Mehrsprachigkeit** – Sprachcode per `language`-Attribut, steuert Kartenbeschriftungen von OpenFreeMap
+- **Mehrsprachigkeit** – Sprachcode per `language`-Attribut, steuert Kartenbeschriftungen von OpenFreeMap und VersaTiles (basemap.de bleibt deutsch)
 - **Cluster** – automatische Marker-Bündelung bei vielen Punkten
 - **Satellitenbild** – ESRI World Imagery als `map-style="satellite"` oder per `show-satellite` Toggle-Button, kein API-Key (Tiles laufen DSGVO-konform über den Proxy)
 - **maxPitch 60°** – Kamerakippung auf 60° begrenzt (verhindert extreme Perspektiven)
@@ -47,7 +50,7 @@ Frontend-Beispiel:
 <vectormap lat="51.43" lng="6.77" zoom="13" map-style="positron" theme="dark" height="400px"></vectormap>
 ```
 
-`map-style` bestimmt den Basis-Kartenstil (`liberty`, `bright`, `positron`, `satellite` oder ein eigener Theme-Name als Basisstil), `theme` legt zusätzlich eine Farbpalette (`dark`, `redaxo`, `bright`, `warm`, `mono` oder ein selbst im Theme-Editor angelegtes Theme) über diesem Basisstil fest. `satellite` ist ein Rasterbild und unterstützt daher kein Theme.
+`map-style` bestimmt den Basis-Kartenstil (`liberty`, `bright`, `positron`, `fiord`, `dark` (OpenFreeMap), `versatiles-colorful`, `versatiles-gray`, `versatiles-colorful-dark`, `versatiles-gray-dark` (VersaTiles), `basemap-de`, `basemap-de-gray`, `basemap-de-relief` (basemap.de, nur Deutschland), `satellite` oder ein eigener Theme-Name als Basisstil), `theme` legt zusätzlich eine Farbpalette (`dark`, `redaxo`, `bright`, `warm`, `mono` oder ein selbst im Theme-Editor angelegtes Theme) über diesem Basisstil fest. `satellite` ist ein Rasterbild und unterstützt daher kein Theme.
 
 ---
 
@@ -198,7 +201,7 @@ Das AddOn registriert ein eigenes Builder-Element `Vector Map` und einen eigenen
 
 Merkmale:
 - Theme-Auswahl direkt im Element
-- Basis-Kartenstil wählbar (`liberty`, `bright`, `positron`, `satellite`)
+- Basis-Kartenstil wählbar (alle [kostenlosen Kartenstile](#kostenlose-kartenstile))
 - Marker + Popup
 - optionales globales Infofenster
 - Controls, Locate, Satellit und Fullscreen
@@ -1329,10 +1332,13 @@ vector_maps/
 │   │   ├── vectormaps_i18n.min.js
 │   │   ├── theme-editor.js      # Quelle: Backend Theme-Editor
 │   │   ├── theme-editor.min.js
+│   │   ├── regions-editor.js    # Quelle: Backend Regionen-Builder
+│   │   ├── regions-editor.min.js
 │   │   ├── vectormaps.css       # Quelle: Styles
 │   │   └── vectormaps.min.css   # Minifiziert (vom Build generiert)
 │   └── maplibre/                # Vendor-Assets (von npm kopiert)
-│       ├── maplibre-gl.js       # MapLibre GL JS
+│       ├── maplibre-gl.mjs      # MapLibre GL JS 6 (ES-Modul, von vectormaps.js importiert)
+│       ├── maplibre-gl-worker.mjs # MapLibre-Worker (muss neben maplibre-gl.mjs liegen)
 │       ├── maplibre-gl.css      # MapLibre GL JS Styles
 │       └── pmtiles.js           # PMTiles-Decoder
 ├── build/                       # Build-Tooling (nicht im Release-ZIP)

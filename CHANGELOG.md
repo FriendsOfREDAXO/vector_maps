@@ -31,6 +31,12 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 - Fehlende Sprite-Icons über `setMissingStyleImageResolver` (MapLibre 6).
 - Demo-Code für eigene MapLibre-Karten auf MapLibre 6 (Modul) umgestellt.
+- **Doku und Demos** auf 2.0:
+  - README: Features, Kartenstile, Einbindung als Modul, eigener JavaScript-Code, CSP, Ordnerstruktur.
+  - Demo „Basis“: neues Beispiel 7 mit allen kostenlosen Stilen nebeneinander.
+  - Demo „Übersicht“: Stil-Knöpfe für alle Anbieter.
+  - Demo „Erweitert“: Reiter VersaTiles und basemap.de.
+  - Hinweise im YForm-Feld.
 
 ---
 

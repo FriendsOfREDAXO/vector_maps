@@ -59,9 +59,9 @@ echo BackendHero::render(
                 <div class="alert alert-warning" style="margin:0">
                     <strong>Voraussetzungen</strong>
                     <p style="margin:8px 0 0 0;font-size:13px">
-                        MapLibre GL JS benötigt WebGL-Unterstützung im Browser.
+                        MapLibre GL JS 6 benötigt WebGL2 im Browser.
                         Alle Kacheln (<code>.pbf</code>) werden via REDAXO-Proxy
-                        von OpenFreeMap geladen und gecacht.
+                        von OpenFreeMap, VersaTiles bzw. basemap.de geladen und gecacht.
                     </p>
                 </div>
             </div>
