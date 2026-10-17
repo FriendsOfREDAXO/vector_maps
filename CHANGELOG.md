@@ -5,6 +5,14 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [1.3.2] – 2026-10-17
+
+### Gefixt
+
+- **Einstellungen:** Die Seite brach mit „Call to undefined method rex_csrf_token::hiddenField()“ ab. Richtig ist `getHiddenField()`.
+
+---
+
 ## [1.3.1] – 2026-10-17
 
 ### Gefixt
