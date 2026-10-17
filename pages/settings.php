@@ -93,7 +93,7 @@ echo BackendHero::render(
 
 // --- Einstellungsformular ---
 $formContent = '
-<form action="' . rex_url::currentBackendPage(['func' => 'save']) . '" method="post">' . $csrf->hiddenField() . '
+<form action="' . rex_url::currentBackendPage(['func' => 'save']) . '" method="post">' . $csrf->getHiddenField() . '
 
     <fieldset>
         <legend>' . $addon->i18n('settings_frontend_heading') . '</legend>
