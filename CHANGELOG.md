@@ -5,6 +5,19 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [2.0.1] – 2026-10-17
+
+### Gefixt
+
+- **Karte lädt nicht, wenn das Skript-Tag umgeschrieben wird:**
+  - Ursache: In 2.0.0 war `vectormaps.min.js` ein ES-Modul. Lazy-Loader, Optimierer oder alte manuelle Einbindungen (`<script src>` ohne `type="module"`) luden es als klassisches Skript, das am `import` abbrach.
+  - `vectormaps.min.js` ist jetzt ein kleiner klassischer Lader, der die Komponente (`vectormaps.module.min.js`) per `import()` nachholt.
+  - Damit funktioniert jede Einbindung: `src`, `defer`, `type="module"`, nachträglich eingefügt. Getestet mit allen vier Varianten.
+- Backend lädt den Lader wieder normal über `rex_view::addJsFile` (kein OUTPUT_FILTER mehr nötig).
+- **Hinweis für eigenen Modul-Code:** Vor dem Zugriff auf `maplibregl` mit `await VectorMaps.ready` warten (README, Demo-Snippets angepasst).
+
+---
+
 ## [2.0.0] – 2026-10-17
 
 ### ⚠️ Umstellungen (Breaking Changes)

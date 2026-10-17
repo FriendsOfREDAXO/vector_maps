@@ -1,0 +1,4083 @@
+/*
+ * vector_maps – ES-Modul (MapLibre GL JS 6 gibt es nur noch als ES-Modul).
+ * Geladen vom klassischen Lader vectormaps.js / vectormaps.min.js (dynamischer import()) – so funktioniert jede Art der
+ * Einbindung. Direkt als <script type="module"> geht auch. MapLibre wird hier importiert, der Worker
+ * (maplibre-gl-worker.mjs) liegt daneben und wird automatisch gefunden.
+ * Für bestehenden Code (Theme-Editor, Regionen, eigene Skripte mit maplibregl/vmProxyUrl) stellt das Modul
+ * window.maplibregl und die bisherigen Funktionen weiter global bereit (siehe Ende der Datei); fertig ist das,
+ * sobald window.VectorMaps.ready erfüllt ist bzw. das Ereignis „vectormaps:ready“ kam.
+ */
+import * as maplibregl from '../maplibre/maplibre-gl.mjs';
+
+if (!window.maplibregl) window.maplibregl = maplibregl;
+
+// Upstream-Noisefilter: MapLibre kann bei manchen OFM-Styles wiederholt
+// "Expected value to be of type number, but found null instead." loggen.
+// Das ist aktuell ein bekanntes, nicht-funktionales Warnrauschen im Worker-Pfad.
+(function vmSilenceKnownMaplibreWarning() {
+    if (window.__vmConsoleWarnPatched) return;
+    window.__vmConsoleWarnPatched = true;
+
+    const originalWarn = console.warn.bind(console);
+    const noisyText = 'Expected value to be of type number, but found null instead.';
+
+    console.warn = function (...args) {
+        const first = args[0];
+        if (typeof first === 'string' && first.indexOf(noisyText) !== -1) {
+            return;
+        }
+        originalWarn(...args);
+    };
+})();
+
+class VectorMapPicker {
+    constructor() {
+        this.i18n = this.loadI18n();
+        this.modal = null;
+        this.map = null;
+        this.marker = null;
+        this.currentInput = null;
+        this.is3dPickerActive = false;
+        this.currentPickerStyle = 'liberty';
+        this.currentPickerTheme = '';
+        this.lastVectorPickerTheme = '';
+        this.inputObserver = null;
+        
+        this.initAll();
+        this.observeDynamicInputs();
+        
+        // Init dynamically if REDAXO reloads DOM via PJAX or jQuery pjax (forcal, yform, etc.)
+        document.addEventListener('pjax:success', () => this.initAll());
+        if (typeof jQuery !== 'undefined') {
+            jQuery(document).on('rex:ready', () => this.initAll());
+        }
+    }
+
+    loadI18n() {
+        const defaultLang = 'de';
+        let currentLang = document.documentElement.lang || defaultLang;
+
+        if (currentLang.length > 2) {
+            currentLang = currentLang.substring(0, 2);
+        }
+
+        const library = window.VectorMapsI18n || window.vector_maps_i18n || {};
+        const dict = library[currentLang] || library[defaultLang] || {
+            picker_button: 'Map Picker öffnen',
+            search_placeholder: 'Adresse suchen...',
+            close: 'Schließen',
+            confirm: 'Übernehmen'
+        };
+
+        if (window.rex && window.rex.vector_maps_i18n) {
+            return Object.assign({}, dict, window.rex.vector_maps_i18n);
+        }
+
+        if (window.vector_maps_i18n && typeof window.vector_maps_i18n === 'object') {
+            return Object.assign({}, dict, window.vector_maps_i18n);
+        }
+        
+        return dict;
+    }
+
+    initModal() {
+        if (document.getElementById('vm-picker-modal')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'vm-picker-modal';
+        overlay.className = 'vm-modal-overlay';
+        
+        overlay.innerHTML = `
+            <div class="vm-modal-content">
+                <div class="vm-modal-header">
+                    <h4>Vector Maps</h4>
+                    <div class="vm-style-switcher">
+                        <button type="button" class="btn btn-xs btn-primary vm-style-btn active" data-style="liberty">Liberty</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="bright">Bright</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="positron">Positron</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="versatiles-colorful">VersaTiles</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="basemap-de">basemap.de</button>
+                        <button type="button" class="btn btn-xs btn-default vm-style-btn" data-style="satellite">Satellit</button>
+                    </div>
+                    <label class="vm-theme-select-wrap" for="vm-picker-theme-select">
+                        <span>${this.i18n.theme || 'Theme'}</span>
+                        <select id="vm-picker-theme-select" class="form-control input-sm">
+                            <option value="">${this.i18n.no_theme || 'Kein Theme'}</option>
+                        </select>
+                    </label>
+                    <span class="vm-theme-select-note" id="vm-picker-theme-note"></span>
+                    <button type="button" class="vm-close-btn">&times;</button>
+                </div>
+                <div class="vm-modal-body">
+                    <div class="vm-search-box">
+                        <input type="text" id="vm-search-input" placeholder="${this.i18n.search_placeholder}" autocomplete="off">
+                        <button type="button" id="vm-search-btn" title="Adresse suchen"><i class="rex-icon rex-icon-search"></i></button>
+                        <button type="button" id="vm-locate-btn" title="Meinen Standort anzeigen"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg></button>
+                    </div>
+                    <div id="vm-picker-suggestions" class="vm-picker-suggestions"></div>
+                    <div id="vm-picker-map" class="vm-map-container"></div>
+                </div>
+                <div class="vm-modal-footer">
+                    <button type="button" class="btn btn-default" id="vm-picker-3d-btn" title="3D-Gebäude ein/ausschalten">
+                        <i class="rex-icon rex-icon-cube"></i> 3D
+                    </button>
+                    <button type="button" class="btn btn-default vm-close-btn">${this.i18n.close}</button>
+                    <button type="button" class="btn btn-primary" id="vm-confirm-btn">${this.i18n.confirm}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        this.modal = overlay;
+
+        const closeBtns = overlay.querySelectorAll('.vm-close-btn');
+        closeBtns.forEach(btn => btn.addEventListener('click', () => this.closeModal()));
+        
+        document.getElementById('vm-confirm-btn').addEventListener('click', () => this.confirmSelection());
+        
+        const searchBtn = document.getElementById('vm-search-btn');
+        const searchInput = document.getElementById('vm-search-input');
+        
+        const doSearch = () => this.searchAddress(searchInput.value);
+        searchBtn.addEventListener('click', doSearch);
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.hidePickerSuggestions();
+                doSearch();
+            }
+        });
+
+        // Live-Autocomplete (debounced) im Picker
+        let _pickerTimer;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(_pickerTimer);
+            const q = searchInput.value.trim();
+            if (q.length < 3) { this.hidePickerSuggestions(); return; }
+            _pickerTimer = setTimeout(() => this.fetchPickerSuggestions(q), 300);
+        });
+
+        // Suggestions bei Klick außerhalb schließen
+        overlay.addEventListener('click', (e) => {
+            if (!e.target.closest('.vm-search-box') && !e.target.closest('.vm-picker-suggestions')) {
+                this.hidePickerSuggestions();
+            }
+        });
+
+        // Standort-Button
+        document.getElementById('vm-locate-btn').addEventListener('click', () => this.locateUser());
+
+        // 3D-Toggle im Picker
+        document.getElementById('vm-picker-3d-btn').addEventListener('click', () => this.toggle3DPicker());
+
+        const themeSelect = document.getElementById('vm-picker-theme-select');
+        if (themeSelect) {
+            themeSelect.addEventListener('change', () => {
+                this.currentPickerTheme = themeSelect.value || '';
+                if (this.currentPickerTheme !== '') {
+                    this.lastVectorPickerTheme = this.currentPickerTheme;
+                }
+                this.applyCurrentPickerTheme();
+            });
+        }
+
+        // Style switcher in picker
+        overlay.querySelectorAll('.vm-style-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                overlay.querySelectorAll('.vm-style-btn').forEach(b => {
+                    b.className = 'btn btn-xs btn-default vm-style-btn';
+                });
+                btn.className = 'btn btn-xs btn-primary vm-style-btn active';
+                this.currentPickerStyle = btn.dataset.style || 'liberty';
+                this.updateThemeSelectState();
+                if (this.map) this.setPickerStyle(this.currentPickerStyle);
+            });
+        });
+    }
+
+    initAll() {
+        // Karten, deren Element nicht mehr im Dokument ist (PJAX, <vectormap> ohne disconnectedCallback), lösen
+        vmSweepDetachedMaps();
+        document.querySelectorAll('input[data-vector-picker="1"]:not(.vm-initialized)').forEach(input => {
+            input.classList.add('vm-initialized');
+            this.setupInput(input);
+        });
+        
+        const demoMap = document.getElementById('vm-demo-map');
+        if (demoMap && !demoMap.classList.contains('vm-initialized')) {
+            demoMap.classList.add('vm-initialized');
+            this.initDemoMap();
+        }
+
+        // <vectormap> (ohne Bindestrich) – kein Custom Element, manuell initialisieren
+        document.querySelectorAll('vectormap:not(.vm-initialized)').forEach(el => {
+            initVectorMap(el);
+        });
+        // <vector-map> ohne connectedCallback (z.B. PJAX-Nachlader)
+        document.querySelectorAll('vector-map:not(.vm-initialized)').forEach(el => {
+            initVectorMap(el);
+        });
+
+        // Demo 11: Ladestation-Demo (nur wenn Element auf der Seite vorhanden)
+        initChargingStationDemo();
+
+        // Demo 12: 3D Overfly Berlin
+        initOverflyDemo();
+
+        // Demo 13: Custom-UI Infofenster-API
+        initCustomUiInfoDemo();
+    }
+
+    observeDynamicInputs() {
+        if (this.inputObserver || !document.body || typeof MutationObserver === 'undefined') {
+            return;
+        }
+
+        this.inputObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (!(node instanceof HTMLElement)) {
+                        continue;
+                    }
+
+                    if (node.matches && node.matches('input[data-vector-picker="1"]:not(.vm-initialized), vectormap:not(.vm-initialized), vector-map:not(.vm-initialized)')) {
+                        this.initAll();
+                        return;
+                    }
+
+                    if (
+                        node.querySelector
+                        && node.querySelector('input[data-vector-picker="1"]:not(.vm-initialized), vectormap:not(.vm-initialized), vector-map:not(.vm-initialized)')
+                    ) {
+                        this.initAll();
+                        return;
+                    }
+                }
+            }
+        });
+
+        this.inputObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
+    }
+
+    setupInput(input) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'input-group';
+        input.parentNode.insertBefore(wrapper, input);
+        wrapper.appendChild(input);
+
+        const btnWrap = document.createElement('span');
+        btnWrap.className = 'input-group-btn';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-default';
+        btn.innerHTML = `<i class="rex-icon rex-icon-map"></i> ${this.i18n.picker_button}`;
+        btn.type = 'button';
+        btnWrap.appendChild(btn);
+        wrapper.appendChild(btnWrap);
+
+        btn.addEventListener('click', () => this.openModal(input));
+    }
+
+    openModal(input) {
+        this.initModal();
+        this.currentInput = input;
+        this.modal.classList.add('vm-active');
+
+        this.applyInputPickerOptions(input);
+        
+        setTimeout(() => this.initPickerMap(input), 150);
+    }
+
+    applyInputPickerOptions(input) {
+        if (!this.modal || !input) return;
+
+        const styleButtons = this.modal.querySelectorAll('.vm-style-btn');
+        const styleName = String(input.getAttribute('data-vector-picker-style') || 'liberty').toLowerCase();
+        this.currentPickerStyle = styleName;
+        styleButtons.forEach((btn) => {
+            const isActive = btn.dataset.style === styleName;
+            btn.className = isActive ? 'btn btn-xs btn-primary vm-style-btn active' : 'btn btn-xs btn-default vm-style-btn';
+        });
+
+        this.populateThemeChoices(input);
+        this.currentPickerTheme = String(input.getAttribute('data-vector-picker-theme') || '');
+        this.lastVectorPickerTheme = this.currentPickerTheme;
+        const themeSelect = document.getElementById('vm-picker-theme-select');
+        if (themeSelect) {
+            themeSelect.value = this.currentPickerTheme;
+        }
+        this.updateThemeSelectState();
+
+        if (this.map) this.setPickerStyle(styleName);
+    }
+
+    /** Stil der Picker-Karte wechseln – nur bei Änderung; danach Sprache und Theme wieder setzen */
+    setPickerStyle(styleName) {
+        if (this._pickerStyleName === styleName) {
+            this.applyCurrentPickerTheme();
+            return;
+        }
+        this._pickerStyleName = styleName;
+        this.map.setStyle(this.proxyStyleUrl(styleName));
+        this.map.once('idle', () => {
+            if (styleName !== 'satellite') vmSetLanguage(this.map, (document.documentElement.lang || navigator.language || 'de').slice(0, 2));
+            this.applyCurrentPickerTheme();
+        });
+    }
+
+    populateThemeChoices(input) {
+        const themeSelect = document.getElementById('vm-picker-theme-select');
+        if (!themeSelect || !input) return;
+
+        let choices = {};
+        try {
+            choices = JSON.parse(input.getAttribute('data-vector-picker-themes') || '{}') || {};
+        } catch (_) {
+            choices = {};
+        }
+
+        themeSelect.innerHTML = '';
+        const noneOption = document.createElement('option');
+        noneOption.value = '';
+        noneOption.textContent = this.i18n.no_theme || 'Kein Theme';
+        themeSelect.appendChild(noneOption);
+
+        Object.entries(choices).forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = String(label);
+            themeSelect.appendChild(option);
+        });
+    }
+
+    applyCurrentPickerTheme() {
+        if (!this.map) return;
+        if (!this.currentPickerTheme || this.currentPickerStyle === 'satellite') {
+            return;
+        }
+
+        if (this.map.isStyleLoaded()) {
+            vmLoadAndApplyTheme(this.map, this.currentPickerTheme);
+            return;
+        }
+
+        this.map.once('idle', () => {
+            vmLoadAndApplyTheme(this.map, this.currentPickerTheme);
+        });
+    }
+
+    updateThemeSelectState() {
+        const themeSelect = document.getElementById('vm-picker-theme-select');
+        const themeNote = document.getElementById('vm-picker-theme-note');
+        if (!themeSelect) return;
+
+        const isSatellite = this.currentPickerStyle === 'satellite';
+        themeSelect.disabled = isSatellite;
+        themeSelect.classList.toggle('vm-theme-select--disabled', isSatellite);
+
+        if (isSatellite) {
+            if (this.currentPickerTheme !== '') {
+                this.lastVectorPickerTheme = this.currentPickerTheme;
+            }
+            this.currentPickerTheme = '';
+            themeSelect.value = '';
+            if (themeNote) {
+                themeNote.textContent = this.i18n.theme_vector_only || 'Themes wirken nur auf Vektorstile';
+            }
+            return;
+        }
+
+        if (this.currentPickerTheme === '' && this.lastVectorPickerTheme !== '') {
+            this.currentPickerTheme = this.lastVectorPickerTheme;
+            themeSelect.value = this.currentPickerTheme;
+        }
+
+        if (themeNote) {
+            themeNote.textContent = '';
+        }
+    }
+    
+    closeModal() {
+        if(this.modal) this.modal.classList.remove('vm-active');
+        this.currentInput = null;
+    }
+    
+    confirmSelection() {
+        if (this.marker && this.currentInput) {
+            const lngLat = this.marker.getLngLat();
+            this.currentInput.value = `${lngLat.lat.toFixed(6)},${lngLat.lng.toFixed(6)}`;
+            this.currentInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        this.closeModal();
+    }
+
+    /**
+     * Baut eine absolute Proxy-URL (MapLibre lehnt relative URLs ab).
+     */
+    proxyUrl(targetUrl) {
+        return window.location.origin + '/?rex_api_vector_maps_proxy=1&target_url=' + encodeURIComponent(targetUrl);
+    }
+
+    proxyStyleUrl(styleName) {
+        // alle bekannten Stile (OpenFreeMap, VersaTiles, basemap.de, Satellit) wie bei <vectormap>
+        return vmProxyStyleUrl(styleName);
+    }
+
+    createTransformRequest() {
+        return (url) => vmTransformRequest(url);
+    }
+
+    initPickerMap(input) {
+        // Initialer Ort (z.B. Kassel, Mitte Deutschland)
+        let startLat = 51.1656;
+        let startLng = 10.4515;
+        let startZoom = 5.5;
+
+        // Falls wir schon einen Wert im Input-Feld haben:
+        if (input.value) {
+            const parts = input.value.split(',');
+            if (parts.length === 2) {
+                const lat = parseFloat(parts[0]);
+                const lng = parseFloat(parts[1]);
+                if (!isNaN(lat) && !isNaN(lng)) {
+                    startLat = lat;
+                    startLng = lng;
+                    startZoom = 14; 
+                }
+            }
+        }
+
+        if (!this.map) {
+            this._pickerStyleName = this.currentPickerStyle || 'liberty';
+            this.map = new maplibregl.Map({
+                container: 'vm-picker-map',
+                style: this.proxyStyleUrl(this.currentPickerStyle || 'liberty'),
+                validateStyle: false,
+                center: [startLng, startLat],
+                zoom: startZoom,
+                transformRequest: this.createTransformRequest()
+            });
+
+            this.map.addControl(new maplibregl.NavigationControl());
+
+            this.marker = new maplibregl.Marker({
+                draggable: true,
+                color: '#d9534f'
+            }).setLngLat([startLng, startLat]).addTo(this.map);
+
+            this.map.on('click', (e) => {
+                this.marker.setLngLat(e.lngLat);
+            });
+            
+            this.map.on('load', () => {
+                this.map.resize();
+                // Picker-Karte auf Seitensprache setzen
+                const uiLang = (document.documentElement.lang || navigator.language || 'de').slice(0, 2);
+                vmSetLanguage(this.map, uiLang);
+                this.applyCurrentPickerTheme();
+            });
+
+            // 3D-Gebäude nach Style-Wechsel wiederherstellen
+            this.map.on('styledata', () => {
+                if (this.is3dPickerActive && this.map.isStyleLoaded()) {
+                    this.add3dBuildingsPicker();
+                }
+            });
+        } else {
+            // Map gibt es schon, nur neu zentrieren und Marker setzen
+            this.map.resize();
+            this.map.setCenter([startLng, startLat]);
+            this.map.setZoom(startZoom);
+            this.marker.setLngLat([startLng, startLat]);
+            this.applyCurrentPickerTheme();
+        }
+    }
+
+    async searchAddress(query) {
+        if (!query || !this.map) return;
+        const btn = document.getElementById('vm-search-btn');
+        const origIcon = btn ? btn.innerHTML : '';
+        if (btn) btn.innerHTML = '\u2026';
+        try {
+            const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(query);
+            const resp = await fetch(this.proxyUrl(url));
+            const data = await resp.json();
+            if (btn) btn.innerHTML = origIcon;
+            if (data && data.length > 0) {
+                const lat = parseFloat(data[0].lat);
+                const lng = parseFloat(data[0].lon);
+                this.map.flyTo({ center: [lng, lat], zoom: 15 });
+                if (this.marker) this.marker.setLngLat([lng, lat]);
+            }
+        } catch (e) {
+            if (btn) btn.innerHTML = origIcon;
+            console.error('Picker-Suche fehlgeschlagen', e);
+        }
+    }
+
+    async fetchPickerSuggestions(query) {
+        const sugDiv = document.getElementById('vm-picker-suggestions');
+        if (!sugDiv) return;
+        try {
+            const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&q=' + encodeURIComponent(query);
+            const resp = await fetch(this.proxyUrl(url));
+            const data = await resp.json();
+            this.showPickerSuggestions(data);
+        } catch (_) {}
+    }
+
+    showPickerSuggestions(results) {
+        const sugDiv = document.getElementById('vm-picker-suggestions');
+        if (!sugDiv) return;
+        sugDiv.innerHTML = '';
+        if (!results || !results.length) { sugDiv.classList.remove('vm-picker-suggestions--open'); return; }
+        results.forEach(r => {
+            const item = document.createElement('div');
+            item.className = 'vm-picker-suggestion-item';
+            item.textContent = r.display_name;
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const searchInput = document.getElementById('vm-search-input');
+                if (searchInput) searchInput.value = r.display_name;
+                const lat = parseFloat(r.lat);
+                const lng = parseFloat(r.lon);
+                if (this.map) this.map.flyTo({ center: [lng, lat], zoom: 15 });
+                if (this.marker) this.marker.setLngLat([lng, lat]);
+                this.hidePickerSuggestions();
+            });
+            sugDiv.appendChild(item);
+        });
+        sugDiv.classList.add('vm-picker-suggestions--open');
+    }
+
+    hidePickerSuggestions() {
+        const sugDiv = document.getElementById('vm-picker-suggestions');
+        if (sugDiv) {
+            sugDiv.classList.remove('vm-picker-suggestions--open');
+            sugDiv.innerHTML = '';
+        }
+    }
+
+    locateUser() {
+        if (!navigator.geolocation) {
+            alert('Ihr Browser unterstützt keine Geolokalisierung.');
+            return;
+        }
+        const locateSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s6.5-4.2 6.5-10.2A6.5 6.5 0 1 0 5.5 11.8C5.5 17.8 12 22 12 22Z"/><circle cx="12" cy="11" r="2.2"/></svg>';
+        const btn = document.getElementById('vm-locate-btn');
+        if (btn) btn.classList.add('locating');
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                if (btn) { btn.classList.remove('locating'); btn.innerHTML = locateSvg; }
+                const { latitude: lat, longitude: lng } = pos.coords;
+                if (this.map) {
+                    this.map.flyTo({ center: [lng, lat], zoom: 15 });
+                }
+                if (this.marker) {
+                    this.marker.setLngLat([lng, lat]);
+                }
+            },
+            () => {
+                if (btn) { btn.classList.remove('locating'); btn.innerHTML = locateSvg; }
+                alert('Standort konnte nicht ermittelt werden. Bitte Berechtigung im Browser prüfen.');
+            },
+            { timeout: 8000, maximumAge: 60000 }
+        );
+    }
+
+    toggle3DPicker() {
+        this.is3dPickerActive = !this.is3dPickerActive;
+        const btn = document.getElementById('vm-picker-3d-btn');
+        if (this.is3dPickerActive) {
+            if (btn) btn.className = 'btn btn-primary';
+            if (this.map) {
+                if (this.map.isStyleLoaded()) {
+                    this.add3dBuildingsPicker();
+                }
+                this.map.easeTo({ pitch: 50 });
+            }
+        } else {
+            if (btn) btn.className = 'btn btn-default';
+            if (this.map) {
+                if (this.map.getLayer('vm-picker-3d-buildings')) {
+                    this.map.removeLayer('vm-picker-3d-buildings');
+                }
+                this.map.easeTo({ pitch: 0 });
+            }
+        }
+    }
+
+    add3dBuildingsPicker() {
+        if (!this.map || this.map.getLayer('vm-picker-3d-buildings')) return;
+        const sources = this.map.getStyle().sources;
+        const srcName = Object.keys(sources).find(k => sources[k].type === 'vector') || 'openmaptiles';
+        this.map.addLayer({
+            'id': 'vm-picker-3d-buildings',
+            'source': srcName,
+            'source-layer': 'building',
+            'filter': ['!=', ['get', 'hide_3d'], true],
+            'type': 'fill-extrusion',
+            'minzoom': 15,
+            'paint': {
+                'fill-extrusion-color': '#aaa',
+                'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]],
+                'fill-extrusion-base': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0]],
+                'fill-extrusion-opacity': 0.6
+            }
+        });
+    }
+
+    initDemoMap() {
+        this.demoMap = new maplibregl.Map({
+            container: 'vm-demo-map',
+            style: this.proxyStyleUrl('liberty'),
+            validateStyle: false,
+            center: [10.4515, 51.1656],
+            zoom: 5.5,
+            pitch: 45,
+            bearing: -17,
+            maxPitch: 60,
+            transformRequest: this.createTransformRequest()
+        });
+        const map = this.demoMap;
+        // Initiale Sprache: Backend-UI-Sprache (via rex.vector_maps_lang) → 'de'
+        let _demoCurrentLang = (window.rex && rex.vector_maps_lang) ? rex.vector_maps_lang : 'de';
+
+        map.addControl(new maplibregl.NavigationControl());
+
+        // Fehlende Sprite-Icons stumm ignorieren (verhindert Console-Spam)
+        vmIgnoreMissingImages(map);
+
+        const add3dBuildings = () => {
+            if (map.getLayer('3d-buildings')) return;
+            // Source-Layer-Name prüfen
+            const sources = map.getStyle().sources;
+            const srcName = Object.keys(sources).find(k => sources[k].type === 'vector') || 'openmaptiles';
+            map.addLayer({
+                'id': '3d-buildings',
+                'source': srcName,
+                'source-layer': 'building',
+                'filter': ['!=', ['get', 'hide_3d'], true],
+                'type': 'fill-extrusion',
+                'minzoom': 15,
+                'paint': {
+                    'fill-extrusion-color': '#aaa',
+                    'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]],
+                    'fill-extrusion-base': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0]],
+                    'fill-extrusion-opacity': .6
+                }
+            });
+        };
+
+        map.on('load', () => {
+            new maplibregl.Marker({color: "#ff0000"}).setLngLat([10.4515, 51.1656]).addTo(map);
+            add3dBuildings();
+            vmFixExtrusionLayers(map);
+            // Demo-Karte auf aktuelle Sprache setzen
+            vmSetLanguage(map, _demoCurrentLang);
+            // Flug nach Mainhattan (Frankfurt Bankenviertel)
+            setTimeout(() => {
+                map.flyTo({ center: [8.682127, 50.110924], zoom: 16, pitch: 60, bearing: 60, duration: 6000 });
+                new maplibregl.Marker({color: "#0000ff"})
+                    .setLngLat([8.682127, 50.110924])
+                    .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setHTML("<h5>Mainhattan</h5><p>Vector Maps via REDAXO-Proxy!</p>"))
+                    .addTo(map)
+                    .togglePopup();
+            }, 1000);
+        });
+
+        // styledata: NUR 3D-Gebäude (idempotent durch getLayer-Check).
+        // setLanguage + vmApplyTheme feuern selbst styledata-Events → NICHT hier aufrufen!
+        // Nach Stil-Wechsel werden sie stattdessen via map.once('idle', ...) aufgerufen.
+        // Auf Satellitenbild gibt es keinen Vektor-Layer → kein 3D möglich.
+        const _isSatellite = () => map.isStyleLoaded() && !!map.getSource('satellite');
+        // Performance: vmFixExtrusionLayers nur einmal pro Style-Load ausführen.
+        // Bei jedem styledata-Event (während Animationen sehr häufig!) würde die
+        // teure JSON.stringify-Schleife sonst die CPU auslasten. Flag wird bei
+        // 'style.load' zurückgesetzt (z.B. nach Satellit-Toggle / setStyle).
+        let _extrusionPatched = false;
+        map.on('style.load', () => { _extrusionPatched = false; });
+        map.on('styledata', () => {
+            if (_extrusionPatched || _isSatellite() || !map.isStyleLoaded()) return;
+            vmFixExtrusionLayers(map);
+            _extrusionPatched = true;
+        });
+        map.on('styledata', () => {
+            if (!map.isStyleLoaded()) return;
+            // nur wenn der 3D-Schalter an ist – sonst kämen ausgeschaltete Gebäude bei jedem Theme-/Sprachwechsel zurück
+            const t3d = document.getElementById('vm-demo-3d-toggle');
+            if (!_isSatellite() && (!t3d || t3d.classList.contains('active'))) add3dBuildings();
+        });
+
+        // Hilfsfunktion: Sprache + Theme nach Stil-Wechsel einmalig sauber anwenden
+        const _demoApplyLangTheme = () => {
+            if (!map.isStyleLoaded()) return;
+            if (_isSatellite()) return; // Kein Sprach-/Theme-Layer auf Satellitenbild
+            vmSetLanguage(map, _demoCurrentLang);
+            if (map._vmThemeColors) vmApplyTheme(map, map._vmThemeColors);
+        };
+
+        // Sprach-Umschalter
+        document.querySelectorAll('.vm-demo-lang-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.vm-demo-lang-btn').forEach(b => {
+                    b.className = 'btn btn-xs btn-default vm-demo-lang-btn';
+                });
+                btn.className = 'btn btn-xs btn-primary vm-demo-lang-btn active';
+                _demoCurrentLang = btn.dataset.lang;
+                vmSetLanguage(map, btn.dataset.lang);
+            });
+        });
+
+        // Theme-Umschalter (Dark / REDAXO / Bright / Warm / Mono / Reset)
+        document.querySelectorAll('.vm-demo-theme-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.vm-demo-theme-btn').forEach(b => {
+                    b.className = 'btn btn-xs btn-default vm-demo-theme-btn';
+                });
+                btn.className = 'btn btn-xs btn-primary vm-demo-theme-btn active';
+                if (btn.dataset.theme === 'none') {
+                    map._vmThemeColors = null;
+                    // Style neu laden, um Original-Farben wiederherzustellen
+                    const activeStyleBtn = document.querySelector('.vm-demo-style-btn.active');
+                    const styleName = activeStyleBtn ? activeStyleBtn.dataset.style : 'liberty';
+                    map.setStyle(this.proxyStyleUrl(styleName));
+                    map.once('idle', _demoApplyLangTheme);
+                } else {
+                    const theme = VM_BUILT_IN_THEMES[btn.dataset.theme];
+                    if (theme) {
+                        map._vmThemeColors = theme.colors;
+                        if (map.isStyleLoaded()) vmApplyTheme(map, theme.colors);
+                    }
+                }
+            });
+        });
+
+        // Style-Umschalter Events
+        document.querySelectorAll('.vm-demo-style-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.vm-demo-style-btn').forEach(b => {
+                    b.className = 'btn btn-sm btn-default vm-demo-style-btn';
+                });
+                btn.className = 'btn btn-sm btn-primary vm-demo-style-btn active';
+                map.setStyle(this.proxyStyleUrl(btn.dataset.style));
+                // Sprache + Theme nach Stil-Wechsel sauber via idle wiederherstellen
+                map.once('idle', _demoApplyLangTheme);
+            });
+        });
+
+        // 3D Toggle
+        const toggle3d = document.getElementById('vm-demo-3d-toggle');
+        if (toggle3d) {
+            toggle3d.addEventListener('click', () => {
+                const on = toggle3d.classList.toggle('active');
+                if (on) {
+                    add3dBuildings();
+                    map.easeTo({ pitch: 60 });
+                } else {
+                    if (map.getLayer('3d-buildings')) map.removeLayer('3d-buildings');
+                    map.easeTo({ pitch: 0 });
+                }
+            });
+        }
+    }
+}
+
+/* =============================================================================
+   <vector-map> / <vectormap> Web Component
+   Attribute:
+     center="lat,lng"           Kartenmittelpunkt (Standard: Deutschland-Mitte)
+     zoom="6"                   Zoom-Stufe
+     map-style="liberty"        Stil: liberty|bright|positron|fiord|dark (OpenFreeMap), versatiles-colorful|-gray|
+                                -colorful-dark|-gray-dark (VersaTiles), basemap-de|-gray|-relief (BKG, nur DE),
+                                satellite oder vollständige Style-URL
+     pitch="0"                  Kamerakippung (0–85°)
+     bearing="0"                Kameraausrichtung
+     height="400"               Höhe in px (oder "60vh", "100%" usw.)
+     3d                         3D-Gebäude aktivieren
+     locate                     Standort-Button anzeigen
+     no-navigation              Zoom-/Dreh-Steuerung ausblenden
+     no-attribution             Quellenangabe ausblenden
+     interactive="false"        Karte statisch (kein Scrollen/Ziehen)
+     markers='[{lat,lng,popup,color,icon,html,anchor,size}]'   JSON-Marker-Array
+       – color   Standardfarbe (#hex)
+       – icon    URL zu Bild-Datei → Custom-Pin als <img>
+       – html    HTML-String (Emoji, SVG, <div class="...">…) → Custom-Pin als HTML-Element
+       – anchor  Ankerpunkt des Custom-Pins: bottom (Standard) | center | top | left | right
+       – size    [Breite, Höhe] in px für icon-Marker, z.B. [40,40]
+     cluster                    Marker clustern
+     show-satellite             Satellitenbild-Toggle-Button einblenden (ESRI World Imagery, kein API-Key)
+     route-from="lat,lng"       Routing-Startpunkt (Koordinaten oder Adresse)
+     route-to="lat,lng"         Routing-Zielpunkt  (Koordinaten oder Adresse)
+     route-mode="driving"       driving | walking | cycling
+     route-panel               Interaktives Route-Panel mit Adresssuche einblenden
+     route-to-locked           Zieladresse im Route-Panel fixieren (nicht änderbar, kein Autocomplete)
+     route-no-steps            Abbiegehinweise im Route-Panel ausblenden
+     map-apps                   Knopf „In Karten-App öffnen“ (Google Maps, Apple Karten, OpenStreetMap, Waze)
+                                optional Liste: map-apps="google,apple,osm,waze"; mit route-panel im Panel
+     map-apps-target="…"        Ziel (Adresse oder lat,lng) – sonst route-to, erster Marker, Kartenmitte
+     map-apps-label="…"         Beschriftung des Knopfs
+     map-apps-position="…"      Ecke ohne route-panel (Standard: bottom-left)
+     nearby="amenity=charging_station" Overpass-Filter für POI-Umgebungssuche
+     nearby-radius="1000"       Suchradius in Metern (Standard: 1000)
+     nearby-label="Ladestn."    Label für Marker-Popups (optional, sonst OSM-Tags)
+     nearby-locate              Statt Karten-Mittelpunkt: Standort des Nutzers nutzen
+     geojson="URL_oder_JSON"    Externes GeoJSON: relative/absolute URL oder Inline-JSON-String
+     geojson-color="#2b7095"    Standardfarbe für GeoJSON-Layer (Punkte, Linien, Flächen)
+     geojson-opacity="0.3"      Transparenz der Flächen-Füllung (0–1)
+     geojson-popup="name"       Property-Name für automatische Popups (leer = alle Properties)
+     fly-to="lat,lng,zoom"      Nach Laden dorthin fliegen
+     fly-delay="0"              Verzögerung in ms vor dem Flug (mit fly-to)
+   ============================================================================= */
+
+/** Bekannte OpenFreeMap-Stil-Namen (werden direkt an OFM weitergeleitet) */
+const VM_OFM_STYLES = ['liberty', 'bright', 'positron', 'fiord', 'dark'];
+/**
+ * Weitere kostenlose Vektorkarten ohne API-Schlüssel (Name → Style-URL, alles über den REDAXO-Proxy):
+ *  - VersaTiles (versatiles.org, Betrieb in Deutschland, OpenStreetMap-Daten, Shortbread-Schema)
+ *  - basemap.de (BKG, amtliche Karte – nur Deutschland, Beschriftung deutsch)
+ * Sprache und Themes sind auf OpenMapTiles-Stile (OpenFreeMap) abgestimmt; VersaTiles übernimmt die Sprache
+ * (name_xx), basemap.de bleibt deutsch.
+ */
+const VM_EXTRA_STYLES = {
+    'versatiles-colorful':      'https://tiles.versatiles.org/assets/styles/colorful/style.json',
+    'versatiles-gray':          'https://tiles.versatiles.org/assets/styles/gray/style.json',
+    'versatiles-colorful-dark': 'https://tiles.versatiles.org/assets/styles/colorful-dark/style.json',
+    'versatiles-gray-dark':     'https://tiles.versatiles.org/assets/styles/gray-dark/style.json',
+    'basemap-de':               'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_col.json',
+    'basemap-de-gray':          'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_gry.json',
+    'basemap-de-relief':        'https://sgx.geodatenzentrum.de/gdz_basemapde_vektor/styles/bm_web_top.json',
+};
+
+/** Raster-Stile (kein Vektor, kein Sprach-/Theme-Layer) */
+const VM_RASTER_STYLES = ['satellite'];
+
+/**
+ * ESRI World Imagery — kostenloses Satellitenbild (kein API-Key erforderlich).
+ * Nur die Basiskacheln; keine Beschriftungen, kein Proxy nötig.
+ */
+const VM_SATELLITE_STYLE = {
+    version: 8,
+    sources: {
+        satellite: {
+            type: 'raster',
+            tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+            tileSize: 256,
+            attribution: '© Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxzoom: 19,
+        },
+    },
+    layers: [{ id: 'satellite', type: 'raster', source: 'satellite' }],
+};
+
+/**
+ * Eingebaute Farb-Themes — werden nach dem Style-Load per setPaintProperty angewendet.
+ * Alle Farben sind CSS-Hex-Werte.
+ */
+const VM_BUILT_IN_THEMES = {
+    dark: {
+        label: 'Dark',
+        colors: {
+            land:              '#16161d',
+            water:             '#0a1520',
+            green:             '#1a2a18',
+            farmland:          '#1e2b1a',
+            road_major:        '#2a3850',
+            road_minor:        '#1e1e2a',
+            road_casing:       '#1a1a2a',
+            rail:              '#252538',
+            building:          '#1e1e2e',
+            outline:           '#2a2a3a',
+            label:             '#b8c8d8',
+            label_halo:        '#16161d',
+            road_label:        '#c8d8e8',
+            route_line:        '#4a9cc8',
+            customize_outlines: true,
+        },
+    },
+    redaxo: {
+        label: 'REDAXO',
+        colors: {
+            land:              '#f2f5f8',
+            water:             '#8fc6eb',
+            green:             '#9cc388',
+            farmland:          '#cfe0b3',
+            road_major:        '#4b9ad9',
+            road_minor:        '#eef3f8',
+            road_casing:       '#8fb6d8',
+            rail:              '#7a8a99',
+            building:          '#d8e1ea',
+            outline:           '#b8c5d2',
+            label:             '#2f3a45',
+            label_halo:        '#f8fbff',
+            road_label:        '#2b4055',
+            route_line:        '#3a7fb8',
+            customize_outlines: true,
+        },
+    },
+    bright: {
+        label: 'Bright',
+        colors: {
+            land:              '#f7f4ee',
+            water:             '#86c6ff',
+            green:             '#8fcf7a',
+            farmland:          '#cdebb3',
+            road_major:        '#f7b955',
+            road_minor:        '#fff9ec',
+            road_casing:       '#d9bf8b',
+            rail:              '#9d8f80',
+            building:          '#d9d0c3',
+            outline:           '#b5aa9a',
+            label:             '#2d2b27',
+            label_halo:        '#fdfaf3',
+            road_label:        '#3a342c',
+            route_line:        '#1f7bbf',
+            customize_outlines: true,
+        },
+    },
+    warm: {
+        label: 'Warm',
+        colors: {
+            land:              '#f4ead6',
+            water:             '#a8c8e0',
+            green:             '#9abf6a',
+            farmland:          '#cfe8a0',
+            road_major:        '#e0a048',
+            road_minor:        '#e8d8b8',
+            road_casing:       '#c89040',
+            rail:              '#c09060',
+            building:          '#d0b88c',
+            outline:           '#c0a878',
+            label:             '#3c2c18',
+            label_halo:        '#f4ead6',
+            road_label:        '#3c2c18',
+            route_line:        '#c05820',
+            customize_outlines: true,
+        },
+    },
+    mono: {
+        label: 'Mono',
+        colors: {
+            land:              '#eeeeee',
+            water:             '#c0ccd4',
+            green:             '#c4d4c0',
+            farmland:          '#dce4d8',
+            road_major:        '#aaaaaa',
+            road_minor:        '#d0d0d0',
+            road_casing:       '#888888',
+            rail:              '#909090',
+            building:          '#c4c4c4',
+            outline:           '#aaaaaa',
+            label:             '#282828',
+            label_halo:        '#ffffff',
+            road_label:        '#222222',
+            route_line:        '#444444',
+            customize_outlines: true,
+        },
+    },
+};
+
+/**
+ * Allgemeiner Proxy-URL-Helper (außerhalb beider Klassen nutzbar).
+ * @param {string} url
+ * @returns {string}
+ */
+function vmProxyUrl(url) {
+    return window.location.origin + '/?rex_api_vector_maps_proxy=1&target_url=' + encodeURIComponent(url);
+}
+
+/**
+ * Server-seitig mitgegebene Basisstil-Zuordnung für Custom-Themes (Name → liberty|bright|positron|fiord|dark).
+ * Wird per boot.php sowohl im Backend (rex.vector_maps_theme_base_styles) als auch im
+ * Frontend (window.VM_THEME_BASE_STYLES) injiziert.
+ * @returns {Record<string, string>}
+ */
+function vmThemeBaseStyleMap() {
+    if (window.rex && window.rex.vector_maps_theme_base_styles) return window.rex.vector_maps_theme_base_styles;
+    if (window.VM_THEME_BASE_STYLES) return window.VM_THEME_BASE_STYLES;
+    return {};
+}
+
+/**
+ * Löst den tatsächlichen Basisstil für einen Style-/Theme-Namen auf,
+ * ohne dafür das Theme-JSON per Fetch laden zu müssen.
+ * @param {string} name
+ * @returns {string}
+ */
+function vmResolveBaseStyle(name) {
+    if (VM_OFM_STYLES.includes(name)) return name;
+    const known = vmThemeBaseStyleMap()[name];
+    return VM_OFM_STYLES.includes(known) ? known : 'liberty';
+}
+
+function vmProxyStyleUrl(nameOrUrl) {
+    if (nameOrUrl === 'satellite') return VM_SATELLITE_STYLE;
+    if (nameOrUrl.startsWith('http')) return vmProxyUrl(nameOrUrl);
+    if (VM_EXTRA_STYLES[nameOrUrl]) return vmProxyUrl(VM_EXTRA_STYLES[nameOrUrl]);
+    // Bekannte OFM-Styles direkt weiterleiten
+    if (VM_OFM_STYLES.includes(nameOrUrl)) {
+        return vmProxyUrl('https://tiles.openfreemap.org/styles/' + nameOrUrl);
+    }
+    // Theme-Name (eingebaut oder custom) → bekannten Basisstil nutzen statt pauschal Liberty zu laden
+    return vmProxyUrl('https://tiles.openfreemap.org/styles/' + vmResolveBaseStyle(nameOrUrl));
+}
+
+/** Fonts, die OpenFreeMap tatsächlich hostet */
+const VM_OFM_KNOWN_FONTS = ['Noto Sans Regular', 'Noto Sans Bold', 'Noto Sans Italic', 'Noto Sans Bold Italic'];
+
+function vmTransformRequest(url) {
+    // OFM-Glyphen: nur ersten Font verwenden + auf bekannte OFM-Fonts normalisieren
+    if (url.includes('tiles.openfreemap.org/fonts/')) {
+        url = url.replace(/(openfreemap\.org\/fonts\/)([^/]+)(\/\d)/, (_, pre, stack, after) => {
+            const first = decodeURIComponent(stack).split(',')[0].trim();
+            const isBold = /bold/i.test(first);
+            const mapped = VM_OFM_KNOWN_FONTS.includes(first)
+                ? first
+                : isBold ? 'Noto Sans Bold' : 'Noto Sans Regular';
+            return pre + encodeURIComponent(mapped) + after;
+        });
+    }
+    const proxied = [
+        'tiles.openfreemap.org/',
+        'tiles.versatiles.org/',
+        'sgx.geodatenzentrum.de/',
+        'api.maptiler.com/',
+        'tiles.stadiamaps.com/',
+        'cdn.protomaps.com/',
+        'tile.openstreetmap.org/',
+        'router.project-osrm.org/',
+        'overpass-api.de/',
+        'server.arcgisonline.com/',
+        'services.arcgisonline.com/',
+    ];
+    if (proxied.some(h => url.includes(h))) return { url: vmProxyUrl(url) };
+    return { url };
+}
+
+/**
+ * Sichert ['get', …] in numerischen Expressions mit einem Fallback ab: ['coalesce', ['get', …], 0].
+ * Verhindert MapLibre-Warnungen "Expected value to be of type number, but found null", z. B. wenn
+ * OSM-Gebäude keine height/min_height haben.
+ *
+ * Idempotent: Ein ['get', …], das direkt in einem coalesce steht, ist schon abgesichert und bleibt
+ * unverändert; verschachtelte coalesce werden zusammengefasst und Argumente hinter dem ersten festen
+ * Wert entfernt (nie erreicht). So wächst die Expression bei wiederholtem Aufruf (Sprachwechsel,
+ * styledata) nicht, und früher mehrfach eingewickelte Styles werden wieder gerade
+ * (['coalesce', ['coalesce', ['get', 'x'], 0], 0] → ['coalesce', ['get', 'x'], 0]).
+ * Auch die Reihenfolge bleibt richtig: ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]
+ * bleibt so – vorher wurde daraus coalesce(coalesce(render_height, 0), …) und height griff nie.
+ *
+ * @param {*} expr
+ * @param {string|null} prop nur dieses Feld absichern (null = jedes get)
+ * @returns {*}
+ */
+// Ausdrücke, deren Argumente keine Zahlenwerte sind (Vergleiche, Bedingungen, Text): dort nichts absichern
+const VM_GUARD_SKIP = new Set(['==', '!=', '<', '<=', '>', '>=', '!', 'all', 'any', 'none', 'has', '!has', 'in', '!in',
+    'to-boolean', 'to-string', 'typeof', 'geometry-type', 'id', 'properties', 'feature-state', 'zoom', 'literal',
+    'within', 'distance', 'is-supported-script', 'collator', 'format', 'image', 'number-format', 'concat',
+    'downcase', 'upcase', 'resolved-locale', 'get', 'at', 'index-of', 'slice', 'length']);
+
+function vmGuardGets(expr, prop) {
+    if (!Array.isArray(expr) || expr.length === 0 || typeof expr[0] !== 'string') {
+        return Array.isArray(expr) ? expr.map((e) => vmGuardGets(e, prop)) : expr;
+    }
+    const isGet = (e) => Array.isArray(e) && e[0] === 'get';
+    const op = expr[0];
+    if (op === 'get') return (prop === null || expr[1] === prop) ? ['coalesce', expr, 0] : expr;
+    if (VM_GUARD_SKIP.has(op)) return expr;
+    // nur Ausgabewerte absichern – Eingaben, Bedingungen und Stufen bleiben, wie sie sind
+    const guardAt = (i) => vmGuardGets(expr[i], prop);
+    if (op === 'match') {          // ['match', input, label, output, …, fallback]
+        return expr.map((e, i) => (i >= 3 && (i % 2 === 1 || i === expr.length - 1) ? guardAt(i) : e));
+    }
+    if (op === 'case') {           // ['case', cond, output, …, fallback]
+        return expr.map((e, i) => (i >= 2 && (i % 2 === 0 || i === expr.length - 1) ? guardAt(i) : e));
+    }
+    if (op === 'interpolate' || op === 'interpolate-hcl' || op === 'interpolate-lab') {   // [op, type, input, stop, output, …]
+        return expr.map((e, i) => (i >= 4 && i % 2 === 0 ? guardAt(i) : e));
+    }
+    if (op === 'step') {           // ['step', input, output0, stop, output, …]
+        return expr.map((e, i) => (i >= 2 && i % 2 === 0 ? guardAt(i) : e));
+    }
+    if (op !== 'coalesce') return expr.map((e, i) => (i === 0 ? e : vmGuardGets(e, prop)));
+
+    // coalesce: Argumente bearbeiten (gets direkt darin sind schon abgesichert), verschachtelte coalesce einebnen
+    // Steht ein coalesce nicht am Ende, ist seine abschließende 0 ein früher angehängter Fallback, der die
+    // folgenden Argumente verdecken würde – weglassen (coalesce(coalesce(a, 0), b, 0) → coalesce(a, b, 0)).
+    const args = [];
+    const rest = expr.slice(1);
+    rest.forEach((arg, i) => {
+        const done = isGet(arg) ? arg : vmGuardGets(arg, prop);
+        if (Array.isArray(done) && done[0] === 'coalesce') {
+            const inner = done.slice(1);
+            if (i < rest.length - 1 && inner.length > 1 && inner[inner.length - 1] === 0) inner.pop();
+            args.push(...inner);
+        } else {
+            args.push(done);
+        }
+    });
+    // hinter dem ersten festen Wert (Zahl, Text, true/false) wird nichts mehr ausgewertet
+    const fixed = args.findIndex((a) => a !== null && !Array.isArray(a));
+    const out = fixed === -1 ? args : args.slice(0, fixed + 1);
+    // endet die Kette mit einem get des gesuchten Felds, fehlt der Fallback
+    const last = out[out.length - 1];
+    if (isGet(last) && (prop === null || last[1] === prop)) out.push(0);
+
+    return ['coalesce', ...out];
+}
+
+/**
+ * Sichert ['get', prop] (auch tief in Expressions) mit coalesce ab – siehe vmGuardGets().
+ * @param {*} expr
+ * @param {string} prop
+ * @returns {*}
+ */
+function vmWrapGetWithCoalesce(expr, prop) {
+    return vmGuardGets(expr, prop);
+}
+
+/**
+ * Sichert alle ['get', …] in numerischen Expressions mit coalesce ab – siehe vmGuardGets().
+ * @param {*} expr
+ * @returns {*}
+ */
+function vmWrapAnyGetWithCoalesce(expr) {
+    return vmGuardGets(expr, null);
+}
+
+/**
+ * Ersetzt rekursiv alle null-Literale in numerischen Expressions durch 0.
+ * Einige externe Styles enthalten in Extrusion-Expressions null-Fallbacks,
+ * die in MapLibre Warnungen auslösen.
+ * @param {*} expr
+ * @returns {*}
+ */
+function vmReplaceNullWithZero(expr) {
+    if (expr === null) return 0;
+    if (!Array.isArray(expr)) return expr;
+    return expr.map((entry) => vmReplaceNullWithZero(entry));
+}
+
+/**
+ * Prüft rekursiv, ob ein Expression-Array null enthält.
+ * @param {*} expr
+ * @returns {boolean}
+ */
+function vmExprHasNull(expr) {
+    if (expr === null) return true;
+    if (!Array.isArray(expr)) return false;
+    return expr.some((entry) => vmExprHasNull(entry));
+}
+
+/**
+ * Härtet numerische Paint-Properties allgemein gegen null in Expressions.
+ * Damit werden MapLibre-Warnungen aus externen Styles reduziert, die
+ * bei der Expression-Evaluation null statt number liefern.
+ * @param {maplibregl.Map} map
+ */
+function vmFixNumericPaintExpressions(map) {
+    const layers = map.getStyle()?.layers;
+    if (!layers) return;
+
+    // Nur numerische Paint-Properties patchen (Farbwerte unberührt lassen).
+    const numericPropPattern = /(width|radius|opacity|size|height|base|blur|offset|padding|gap|spacing)$/;
+
+    for (const layer of layers) {
+        const paint = layer.paint;
+        if (!paint || typeof paint !== 'object') continue;
+
+        for (const [prop, value] of Object.entries(paint)) {
+            if (!numericPropPattern.test(prop)) continue;
+
+            let patched = value;
+            if (patched === null) {
+                patched = 0;
+            } else if (Array.isArray(patched) && vmExprHasNull(patched)) {
+                patched = vmReplaceNullWithZero(patched);
+            }
+
+            if (Array.isArray(patched)) {
+                patched = vmWrapAnyGetWithCoalesce(patched);
+                patched = vmReplaceNullWithZero(patched);
+            }
+
+            if (JSON.stringify(patched) === JSON.stringify(value)) continue;
+
+            try {
+                map.setPaintProperty(layer.id, prop, patched);
+            } catch (_) {}
+        }
+    }
+}
+
+/**
+ * Härtet numerische Layout-Properties gegen null in Expressions.
+ * Einige Styles liefern hier null-Werte, die beim Evaluate in Warnungen enden.
+ * @param {maplibregl.Map} map
+ */
+function vmFixNumericLayoutExpressions(map) {
+    const layers = map.getStyle()?.layers;
+    if (!layers) return;
+
+    const numericLayoutProps = new Set([
+        'icon-size',
+        'icon-offset',
+        'icon-rotate',
+        'text-size',
+        'text-offset',
+        'text-rotate',
+        'text-letter-spacing',
+        'text-line-height',
+        'text-max-width',
+        'symbol-spacing',
+    ]);
+
+    for (const layer of layers) {
+        const layout = layer.layout;
+        if (!layout || typeof layout !== 'object') continue;
+
+        for (const [prop, value] of Object.entries(layout)) {
+            if (!numericLayoutProps.has(prop)) continue;
+
+            let patched = value;
+            if (patched === null) {
+                patched = 0;
+            } else if (Array.isArray(patched) && vmExprHasNull(patched)) {
+                patched = vmReplaceNullWithZero(patched);
+            }
+
+            if (Array.isArray(patched)) {
+                patched = vmWrapAnyGetWithCoalesce(patched);
+                patched = vmReplaceNullWithZero(patched);
+            }
+
+            if (JSON.stringify(patched) === JSON.stringify(value)) continue;
+
+            try {
+                map.setLayoutProperty(layer.id, prop, patched);
+            } catch (_) {}
+        }
+    }
+}
+
+/**
+ * Patcht alle fill-extrusion-Layer im geladenen Style (inkl. OFM-eigene)
+ * so dass fehlende height/min_height-Werte mit 0 ersetzt werden.
+ * @param {maplibregl.Map} map
+ */
+function vmFixExtrusionLayers(map) {
+    const layers = map.getStyle()?.layers;
+    if (!layers) return;
+    for (const layer of layers) {
+        if (layer.type !== 'fill-extrusion') continue;
+        try {
+            const h = map.getPaintProperty(layer.id, 'fill-extrusion-height');
+            const b = map.getPaintProperty(layer.id, 'fill-extrusion-base');
+            if (h !== undefined && h !== null) {
+                const patched = vmReplaceNullWithZero(vmWrapGetWithCoalesce(h, 'height'));
+                if (JSON.stringify(patched) !== JSON.stringify(h))
+                    map.setPaintProperty(layer.id, 'fill-extrusion-height', patched);
+            }
+            if (b !== undefined && b !== null) {
+                const patched = vmReplaceNullWithZero(vmWrapGetWithCoalesce(b, 'min_height'));
+                if (JSON.stringify(patched) !== JSON.stringify(b))
+                    map.setPaintProperty(layer.id, 'fill-extrusion-base', patched);
+            }
+        } catch (_) {}
+    }
+
+    // Zusätzlich generische Null→0-Härtung für numerische Paint-Expressions.
+    vmFixNumericPaintExpressions(map);
+    // Und für numerische Layout-Expressions (z. B. text-size / icon-size).
+    vmFixNumericLayoutExpressions(map);
+}
+
+/**
+ * Paint-/Layout-Eigenschaft nur setzen, wenn sich der Wert ändert. setPaintProperty/setLayoutProperty lösen
+ * „styledata“ aus; Handler, die darauf Theme oder Sprache neu anwenden, liefen sonst endlos weiter.
+ */
+function vmSetPaint(map, layerId, prop, value) {
+    const cur = map.getPaintProperty(layerId, prop);
+    if (cur === value || JSON.stringify(cur) === JSON.stringify(value)) return;
+    map.setPaintProperty(layerId, prop, value);
+}
+
+function vmSetLayout(map, layerId, prop, value) {
+    const cur = map.getLayoutProperty(layerId, prop);
+    if (cur === value || JSON.stringify(cur) === JSON.stringify(value)) return;
+    map.setLayoutProperty(layerId, prop, value);
+}
+
+/**
+ * Wendet ein Theme-Farbobjekt auf eine geladene MapLibre-Karte an.
+ * Iteriert alle Layer und überschreibt Farb-Properties nach Source-Layer und Typ.
+ * @param {maplibregl.Map} map
+ * @param {Object} colors  — { land, water, green, road_major, road_minor, building, label, label_halo, road_label }
+ */
+function vmApplyTheme(map, colors) {
+    if (!colors) return;
+    // isStyleLoaded() prueft auch ob Tiles geladen sind -> gibt false waehrend Tiles streamen.
+    // Wir brauchen nur die Layer-Definitionen (Style-JSON), nicht geladene Tiles.
+    const layers = map.getStyle()?.layers;
+    if (!layers || !layers.length) return;
+    // Halo-Breite: numerischer Wert oder null (→ Stil-Standard beibehalten)
+    const haloWidth = colors.halo_width !== undefined ? parseFloat(colors.halo_width) : null;
+    // Outline/Casing-Overrides: nur anwenden wenn customize_outlines nicht explizit false
+    const applyOutlines = colors.customize_outlines !== false;
+    for (const layer of layers) {
+        const type = layer.type;
+        const sl   = layer['source-layer'] || '';
+        try {
+            // Eigene Route-Layer (dynamisch via vmAddRoutePanel hinzugefügt)
+            if (layer.id === 'vm-route-line') {
+                if (colors.route_line) vmSetPaint(map, layer.id, 'line-color', colors.route_line);
+            } else if (type === 'background') {
+                vmSetPaint(map, layer.id, 'background-color', colors.land);
+            } else if (type === 'symbol' && !sl) {
+                // eigene Beschriftungen (Cluster-Zahlen, Regionen-Labels) behalten ihre Farben
+            } else if (type === 'symbol') {
+                // transportation_name-Layer (Straßen-/Autobahnbeschriftungen): road_label statt label
+                const isRoadLabel = sl === 'transportation_name';
+                const textColor   = isRoadLabel && colors.road_label ? colors.road_label : colors.label;
+                vmSetPaint(map, layer.id, 'text-color', textColor);
+                vmSetPaint(map, layer.id, 'text-halo-color', colors.label_halo);
+                if (haloWidth !== null && !isNaN(haloWidth)) {
+                    vmSetPaint(map, layer.id, 'text-halo-width', haloWidth);
+                }
+                // Hinweis: icon-color wirkt nur bei SDF-Sprites — OFM Liberty nutzt PNG-Sprites
+                // für Autobahn-Schilder, daher kein road_shield-Feld.
+            } else if (sl === 'water' || sl === 'waterway') {
+                if (type === 'fill') {
+                    vmSetPaint(map, layer.id, 'fill-color', colors.water);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', colors.water); } catch (_) {}
+                }
+                if (type === 'line') vmSetPaint(map, layer.id, 'line-color', colors.water);
+            } else if (sl === 'park') {
+                // Schutzgebiete / Nationalparks (eigener Source-Layer in OFM Liberty)
+                const parkColor   = colors.farmland !== undefined ? colors.farmland : colors.green;
+                const parkOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : parkColor;
+                if (type === 'fill') {
+                    vmSetPaint(map, layer.id, 'fill-color', parkColor);
+                    if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', parkOutline); } catch (_) {}
+                }
+                // park_outline ist ein separater line-Layer (rgba(228,241,215,1) im OFM-Standard)
+                if (type === 'line' && applyOutlines) vmSetPaint(map, layer.id, 'line-color', parkOutline);
+            } else if (sl === 'landcover' || sl === 'landuse') {
+                // 3 Grün-Klassen: dunkles Grün (Wald), helles Grün (Wiesen/Parks), Land (sonstige Landnutzung)
+                const isDark  = /wood|forest|scrub/i.test(layer.id);
+                const isLight = /grass|park|nature|meadow|farm|agri|allot|wetland|crop|orchard|vineyard|garden/i.test(layer.id);
+                let c;
+                if (isDark)       c = colors.green;
+                else if (isLight) c = colors.farmland !== undefined ? colors.farmland : colors.green;
+                else              c = colors.land;
+                if (type === 'fill') {
+                    vmSetPaint(map, layer.id, 'fill-color', c);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', c); } catch (_) {}
+                } else if (type === 'line') {
+                    // Separate Outline-Layer (z.B. landuse_overlay_line) → gleiche Farbe
+                    vmSetPaint(map, layer.id, 'line-color', c);
+                }
+            } else if (sl === 'aeroway') {
+                // Flughafen-Flächen und Rollwege ähnlich wie Nebenstraßen einfärben
+                if (type === 'fill') {
+                    vmSetPaint(map, layer.id, 'fill-color', colors.road_minor);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', colors.road_minor); } catch (_) {}
+                }
+                if (type === 'line') vmSetPaint(map, layer.id, 'line-color', colors.road_minor);
+            } else if (sl === 'boundary') {
+                // Ländergrenzen / Verwaltungsgrenzen in Beschriftungsfarbe (gedämpft)
+                if (type === 'line') {
+                    try { vmSetPaint(map, layer.id, 'line-color', colors.label); } catch (_) {}
+                }
+            } else if (sl === 'transportation') {
+                const isMajor = /motorway|trunk|primary/i.test(layer.id);
+                const isCase  = /case|casing/i.test(layer.id);
+                const isRail  = /rail|transit|subway|tram|light_rail|monorail|funicular/i.test(layer.id);
+                if (type === 'line') {
+                    if (isCase) {
+                        // Casing/Outline-Layer der Straßen — nur wenn customize_outlines aktiv
+                        if (applyOutlines) {
+                            const casingColor = colors.road_casing !== undefined ? colors.road_casing : colors.road_minor;
+                            vmSetPaint(map, layer.id, 'line-color', casingColor);
+                        }
+                    } else {
+                        let lineColor;
+                        if (isRail)       lineColor = colors.rail !== undefined ? colors.rail : colors.road_minor;
+                        else if (isMajor) lineColor = colors.road_major;
+                        else              lineColor = colors.road_minor;
+                        vmSetPaint(map, layer.id, 'line-color', lineColor);
+                    }
+                }
+            } else if (sl === 'building') {
+                const buildingOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : colors.building;
+                if (type === 'fill') {
+                    vmSetPaint(map, layer.id, 'fill-color', colors.building);
+                    if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', buildingOutline); } catch (_) {}
+                } else if (type === 'line') {
+                    // Separate Gebäude-Outline-Layer — nur wenn customize_outlines aktiv
+                    if (applyOutlines) vmSetPaint(map, layer.id, 'line-color', buildingOutline);
+                } else if (type === 'fill-extrusion') {
+                    // 3D-Gebäude (dynamisch via vmAdd3dBuildings / add3dBuildings hinzugefügt)
+                    vmSetPaint(map, layer.id, 'fill-extrusion-color', colors.building);
+                }
+            }
+        } catch (_) { /* Einige Paint-Properties sind schreibgeschützt — ignorieren */ }
+    }
+}
+
+/**
+ * Lädt ein Theme (eingebaut oder custom vom Server) und wendet es auf die Karte an.
+ * Speichert die Farben in map._vmThemeColors für styledata-Wiederherstellung.
+ * @param {maplibregl.Map} map
+ * @param {string} themeName
+ */
+/** Theme-Daten je Seite nur einmal laden (mehrere Karten, Picker) – Name → Promise */
+const VM_THEME_CACHE = new Map();
+
+async function vmLoadAndApplyTheme(map, themeName) {
+    let colors;
+    let baseStyle = null;
+    // Karte nie unsichtbar lassen: bei Fehlern trotzdem einblenden
+    const reveal = () => { if (map._vmEl) map._vmEl.classList.add('vm-theme-ready'); };
+    if (VM_BUILT_IN_THEMES[themeName]) {
+        colors = VM_BUILT_IN_THEMES[themeName].colors;
+    } else {
+        try {
+            if (!VM_THEME_CACHE.has(themeName)) {
+                VM_THEME_CACHE.set(themeName, fetch(window.location.origin + '/?rex_api_vector_maps_theme=' + encodeURIComponent(themeName), { cache: 'no-store' })
+                    .then((r) => (r.ok ? r.json() : null))
+                    .catch(() => null));
+            }
+            const data = await VM_THEME_CACHE.get(themeName);
+            if (!data) { VM_THEME_CACHE.delete(themeName); console.warn('<vectormap> Theme nicht gefunden:', themeName); reveal(); return; }
+            colors = data.colors;
+            if (typeof data.base_style === 'string') {
+                const candidate = data.base_style.toLowerCase();
+                if (VM_OFM_STYLES.includes(candidate)) baseStyle = candidate;
+            }
+        } catch (e) {
+            console.warn('<vectormap> Theme-Ladefehler:', e);
+            reveal();
+            return;
+        }
+    }
+
+    // Optionaler Basisstil aus Theme-Daten (z. B. bright/positron)
+    if (baseStyle && map._vmBaseStyle !== baseStyle && !map._vmThemeSwitchingStyle) {
+        map._vmThemeSwitchingStyle = true;
+        map._vmBaseStyle = baseStyle;
+        map.setStyle(vmProxyStyleUrl(baseStyle));
+        // Merker spätestens nach 15 s lösen, falls 'idle' ausbleibt (Stil lädt nicht)
+        const release = setTimeout(() => { map._vmThemeSwitchingStyle = false; reveal(); }, 15000);
+        map.once('idle', () => {
+            clearTimeout(release);
+            map._vmThemeSwitchingStyle = false;
+            vmLoadAndApplyTheme(map, themeName);
+        });
+        return;
+    }
+
+    // Farben speichern BEVOR vmApplyTheme, damit styledata-Handler sie wiederherstellen kann
+    map._vmThemeColors = colors;
+    vmApplyTheme(map, colors);
+    // Karte einblenden (war via vm-has-theme unsichtbar bis Theme geladen)
+    if (map._vmEl) map._vmEl.classList.add('vm-theme-ready');
+    // Safety-Net: beim idle-Event nochmals anwenden falls Tiles-Ladevorgang
+    // die Anwendung verzoegert hat (Race Condition mit isStyleLoaded())
+    map.once('idle', () => {
+        if (map._vmThemeColors) vmApplyTheme(map, map._vmThemeColors);
+        if (map._vmEl) map._vmEl.classList.add('vm-theme-ready');
+    });
+}
+
+/**
+ * Setzt die Kartensprache durch direktes Manipulieren der text-field-Expressions
+ * aller Symbol-Layer. Implementiert die offizielle OFM-Empfehlung (Issue #22):
+ *   – name_XX  (OFM-internes Unterstriche-Feld, z. B. name_de)
+ *   – name:XX  (OSM-Standard, z. B. name:de)
+ *   – name     (lokaler/nativer Name als Fallback)
+ * Non-Latin-Schriften (CJK, Arabisch …) werden zweizeilig dargestellt:
+ *   name:latin + Zeilenumbruch + name:nonlatin
+ * Straßen-/Autobahn-Nummern ('ref'-Expressions) werden übersprungen.
+ * @param {maplibregl.Map} map
+ * @param {string} lang  — ISO-639-1 (z. B. 'de', 'en', 'fr')
+ */
+function vmSetLanguage(map, lang) {
+    if (!lang || !map.isStyleLoaded() || map._vmNoLanguage) return;
+    // basemap.de (auch nach Stilwechsel in Demo/Picker): nur deutsche Namen – Beschriftung nicht umstellen
+    const sources = map.getStyle().sources || {};
+    if (Object.values(sources).some((src) => String(src.url || (src.tiles || [])[0] || '').includes('geodatenzentrum'))) return;
+    // Zeilentrennzeichen: bei Linien/Highways Leerzeichen, sonst Zeilenumbruch
+    const sepLine  = ' ';
+    const sepOther = '\n';
+    const layers = map.getStyle().layers;
+    for (const layer of layers) {
+        // nur Beschriftungen des Kartenstils (Vektorkacheln) – eigene Ebenen (Cluster-Zahlen, Regionen) behalten ihren Text
+        if (layer.type !== 'symbol' || !layer['source-layer']) continue;
+        try {
+            const tf = map.getLayoutProperty(layer.id, 'text-field');
+            // Leer oder nur ref-Expressions (Straßennummern) → überspringen
+            if (tf === undefined || tf === null || tf === '') continue;
+            if (Array.isArray(tf) && tf[0] === 'to-string' &&
+                Array.isArray(tf[1]) && tf[1][0] === 'get' && tf[1][1] === 'ref') continue;
+
+            const isLine = layer.id.includes('line') || layer.id.includes('highway');
+            const sep    = isLine ? sepLine : sepOther;
+
+            // Reihenfolge: OFM-Unterstriche → OSM-Doppelpunkt → nativer Name
+            const parts = [
+                ['get', 'name_' + lang],
+                ['get', 'name:' + lang],
+                ['get', 'name'],
+            ];
+
+            vmSetLayout(map, layer.id, 'text-field', [
+                'case',
+                ['has', 'name:nonlatin'],
+                // Zweizeilig: bevorzugte-Sprache\nnon-latin (für Arabisch, CJK …)
+                ['concat',
+                    ['coalesce', ['get', 'name:' + lang], ['get', 'name:latin']],
+                    sep,
+                    ['get', 'name:nonlatin'],
+                ],
+                // Einzeilig: coalesce über name_XX, name:XX, name
+                ['coalesce', ...parts],
+            ]);
+        } catch (_) { /* schreibgeschützte Layer ignorieren */ }
+    }
+}
+
+/**
+ * Wird vom Custom Element (connectedCallback) und von VectorMapPicker.initAll() aufgerufen.
+ * Setzt Höhe sofort, baut die eigentliche Karte lazily via IntersectionObserver.
+ * @param {HTMLElement} el
+ */
+function initVectorMap(el) {
+    if (el._vmInitialized) return;
+    el._vmInitialized = true;
+    el.classList.add('vm-initialized');
+
+    // Höhe sofort setzen — Layout-Stabilität auch vor dem WebGL-Aufbau
+    const height = el.getAttribute('height') || '400';
+    el.style.display   = 'block';
+    el.style.height    = /^\d+$/.test(height) ? height + 'px' : height;
+    el.style.position  = 'relative';
+    el.style.overflow  = 'hidden';
+    el.style.setProperty('--vm-map-h', el.style.height);
+
+    // Schmale Karte (Handy, enge Spalte): Klasse vm-compact – Routenplaner als einklappbare Leiste unten,
+    // Seiten-Layout untereinander (vectormaps.css)
+    if ('ResizeObserver' in window && !el._vmResizeObs) {
+        el._vmResizeObs = new ResizeObserver(() => el.classList.toggle('vm-compact', el.clientWidth > 0 && el.clientWidth < 560));
+        el._vmResizeObs.observe(el);
+    }
+
+    // Lazy init via IntersectionObserver — verhindert „Too many active WebGL contexts"
+    // wenn viele <vectormap>-Elemente gleichzeitig auf der Seite vorhanden sind
+    if ('IntersectionObserver' in window) {
+        const obs = new IntersectionObserver((entries, o) => {
+            if (!entries[0].isIntersecting) return;
+            o.disconnect();
+            vmEnqueueBuild(el);
+        }, { rootMargin: '50px 0px' });
+        obs.observe(el);
+        return;
+    }
+    vmEnqueueBuild(el);
+}
+
+const VM_CONTROL_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
+function vmNormalizeControlPosition(raw, fallback = 'top-right') {
+    const pos = String(raw || '').toLowerCase();
+    return VM_CONTROL_POSITIONS.includes(pos) ? pos : fallback;
+}
+
+function vmResolveClusterPosition(clusterRaw, fallback = 'top-right') {
+    const cluster = String(clusterRaw || '').toLowerCase();
+    if (cluster === 'left') return 'top-left';
+    if (cluster === 'right') return 'top-right';
+    if (VM_CONTROL_POSITIONS.includes(cluster)) return cluster;
+    return fallback;
+}
+
+function vmResolveControlsPosition(el, fallback = 'top-right') {
+    if (el.hasAttribute('controls-position')) {
+        return vmNormalizeControlPosition(el.getAttribute('controls-position'), fallback);
+    }
+    return vmResolveClusterPosition(el.getAttribute('controls-cluster'), fallback);
+}
+
+function vmResolveButtonsBasePosition(el, fallback = 'top-right') {
+    if (el.hasAttribute('buttons-position')) {
+        return vmNormalizeControlPosition(el.getAttribute('buttons-position'), vmResolveControlsPosition(el, fallback));
+    }
+    return vmResolveControlsPosition(el, fallback);
+}
+
+function vmSetCornerVars(el, prefix, position, offsetPx = 10, stackOffset = 0, crossOffsetPx = null) {
+    const pos = vmNormalizeControlPosition(position, null);
+    if (!pos) return;
+
+    const px = (n) => `${Math.max(0, Math.round(n))}px`;
+    const base = Number(offsetPx) || 10;
+    const stack = Number(stackOffset) || 0;
+    const cross = null === crossOffsetPx ? base : (Number(crossOffsetPx) || 10);
+
+    if (pos === 'top-left') {
+        el.style.setProperty(`--${prefix}-top`, px(base + stack));
+        el.style.setProperty(`--${prefix}-left`, px(cross));
+        el.style.setProperty(`--${prefix}-right`, 'auto');
+        el.style.setProperty(`--${prefix}-bottom`, 'auto');
+    } else if (pos === 'top-right') {
+        el.style.setProperty(`--${prefix}-top`, px(base + stack));
+        el.style.setProperty(`--${prefix}-right`, px(cross));
+        el.style.setProperty(`--${prefix}-left`, 'auto');
+        el.style.setProperty(`--${prefix}-bottom`, 'auto');
+    } else if (pos === 'bottom-left') {
+        el.style.setProperty(`--${prefix}-bottom`, px(base + stack));
+        el.style.setProperty(`--${prefix}-left`, px(cross));
+        el.style.setProperty(`--${prefix}-right`, 'auto');
+        el.style.setProperty(`--${prefix}-top`, 'auto');
+    } else {
+        el.style.setProperty(`--${prefix}-bottom`, px(base + stack));
+        el.style.setProperty(`--${prefix}-right`, px(cross));
+        el.style.setProperty(`--${prefix}-left`, 'auto');
+        el.style.setProperty(`--${prefix}-top`, 'auto');
+    }
+}
+
+function vmApplyOverlayPositions(el) {
+    const reserve = vmCollectControlReserve(el);
+    const edgeOffset = parseFloat(el.getAttribute('buttons-offset') || '10');
+    const basePos = vmResolveButtonsBasePosition(el, 'top-right');
+    const locatePos = vmNormalizeControlPosition(el.getAttribute('locate-position'), basePos);
+    const satPos = vmNormalizeControlPosition(el.getAttribute('satellite-position'), basePos);
+    const gap = parseFloat(el.getAttribute('buttons-gap') || '38');
+
+    const locateBase = edgeOffset + (reserve[locatePos] || 0);
+    vmSetCornerVars(el, 'vm-locate', locatePos, locateBase, 0, edgeOffset);
+
+    // Nur bei gleicher Ecke stacken, sonst unabhängig platzieren
+    const satStack = satPos === locatePos ? gap : 0;
+    const satBase = edgeOffset + (reserve[satPos] || 0);
+    vmSetCornerVars(el, 'vm-satellite', satPos, satBase, satStack, edgeOffset);
+}
+
+function vmCollectControlReserve(el) {
+    const reserve = {
+        'top-left': 0,
+        'top-right': 0,
+        'bottom-left': 0,
+        'bottom-right': 0,
+    };
+
+    // Wenn die Karte bereits gerendert ist, echte Eckhöhen messen statt fixer Schätzwerte.
+    const mapPane = el._vmMapContainer || null;
+    const controlContainer = mapPane ? mapPane.querySelector('.maplibregl-control-container') : null;
+    if (controlContainer) {
+        VM_CONTROL_POSITIONS.forEach((pos) => {
+            const corner = controlContainer.querySelector('.maplibregl-ctrl-' + pos);
+            if (corner) {
+                reserve[pos] = Math.max(0, Math.ceil(corner.offsetHeight || 0));
+            }
+        });
+        return reserve;
+    }
+
+    if (!el.hasAttribute('no-navigation')) {
+        const navPos = vmResolveControlsPosition(el, 'top-right');
+        reserve[navPos] += 74;
+    }
+
+    if (el.hasAttribute('fullscreen')) {
+        const fsFallback = vmResolveControlsPosition(el, 'top-right');
+        const fsPos = vmNormalizeControlPosition(el.getAttribute('fullscreen-position'), fsFallback);
+        reserve[fsPos] += 42;
+    }
+
+    return reserve;
+}
+
+function vmApplyRoutePanelPosition(el) {
+    const panel = el._vmRoutePanel;
+    if (!panel) return;
+    const mapPane = el._vmMapContainer || el.querySelector('.vm-map-pane');
+
+    const layout = String(el.getAttribute('route-panel-layout') || '').toLowerCase();
+    if (layout === 'side-right' || layout === 'side-left') {
+        panel.classList.add('vm-route-panel--side');
+        el.classList.add('vm-route-layout-side');
+        el.classList.toggle('vm-route-layout-left', layout === 'side-left');
+
+        // initVectorMap setzt inline display:block/overflow:hidden.
+        // Für Side-Layout überschreiben wir das explizit auf dem Host.
+        el.style.display = 'flex';
+        el.style.alignItems = 'stretch';
+        el.style.gap = '12px';
+        el.style.overflow = 'visible';
+
+        if (mapPane) {
+            mapPane.style.flex = '1 1 auto';
+            mapPane.style.minWidth = '0';
+            mapPane.style.height = '100%';
+        }
+
+        const w = String(el.getAttribute('route-panel-width') || '340');
+        const width = /^\d+$/.test(w) ? (w + 'px') : w;
+        el.style.setProperty('--vm-route-side-width', width);
+        return;
+    }
+
+    panel.classList.remove('vm-route-panel--side');
+    el.classList.remove('vm-route-layout-side', 'vm-route-layout-left');
+    el.style.display = 'block';
+    el.style.alignItems = '';
+    el.style.gap = '';
+    el.style.overflow = 'hidden';
+
+    if (mapPane) {
+        mapPane.style.flex = '';
+        mapPane.style.minWidth = '';
+        mapPane.style.height = '100%';
+    }
+
+    const pos = vmNormalizeControlPosition(el.getAttribute('route-panel-position'), 'top-left');
+    vmSetCornerVars(el, 'vm-rp', pos, parseFloat(el.getAttribute('route-panel-offset') || '12'), 0);
+
+    const preset = String(el.getAttribute('route-panel-style') || '').toLowerCase();
+    panel.classList.remove('vm-route-panel--glass', 'vm-route-panel--contrast', 'vm-route-panel--brand');
+    if (preset === 'glass' || preset === 'contrast' || preset === 'brand') {
+        panel.classList.add('vm-route-panel--' + preset);
+    }
+}
+
+function vmApplyControlsStylePreset(el) {
+    const presetClasses = [
+        'vm-controls-style-soft',
+        'vm-controls-style-rail',
+        'vm-controls-style-minimal',
+        'vm-controls-style-bold',
+    ];
+    el.classList.remove(...presetClasses);
+
+    const preset = String(el.getAttribute('controls-style') || '').toLowerCase();
+    if (!preset) return;
+
+    const allow = new Set(['soft', 'rail', 'minimal', 'bold']);
+    if (allow.has(preset)) {
+        el.classList.add('vm-controls-style-' + preset);
+    }
+}
+
+function vmSetInfoHtml(el, html) {
+    if (!el._vmInfoWindow) return;
+    const box = el._vmInfoWindow.querySelector('.vm-info-window__content');
+    if (box) box.innerHTML = String(html || '');
+}
+
+function vmFindDirectChildByClass(el, className) {
+    for (let i = 0; i < el.children.length; i++) {
+        const child = el.children[i];
+        if (child.classList && child.classList.contains(className)) {
+            return child;
+        }
+    }
+    return null;
+}
+
+function vmExtractInlineInfoWindow(el) {
+    if (el._vmInlineInfoRead) return;
+    el._vmInlineInfoRead = true;
+
+    const inlineInfo = vmFindDirectChildByClass(el, 'mapinfo');
+    if (!inlineInfo) return;
+
+    if (!el.hasAttribute('info-html')) {
+        el.setAttribute('info-html', inlineInfo.innerHTML);
+    }
+    if (!el.hasAttribute('info-position') && inlineInfo.hasAttribute('data-position')) {
+        el.setAttribute('info-position', inlineInfo.getAttribute('data-position') || 'top-left');
+    }
+    if (!el.hasAttribute('info-class') && inlineInfo.hasAttribute('data-class')) {
+        el.setAttribute('info-class', inlineInfo.getAttribute('data-class') || '');
+    }
+    if (inlineInfo.hasAttribute('data-closable')) {
+        el.setAttribute('info-closable', '');
+    }
+
+    inlineInfo.remove();
+}
+
+function vmApplyInfoWindow(el) {
+    vmExtractInlineInfoWindow(el);
+    const infoHtml = el.getAttribute('info-html');
+    const infoVisible = el.getAttribute('info-visible');
+
+    if (!infoHtml || infoVisible === 'false') {
+        if (el._vmInfoWindow) el._vmInfoWindow.style.display = 'none';
+        return;
+    }
+
+    if (!el._vmInfoWindow) {
+        const wrap = document.createElement('div');
+        wrap.className = 'vm-info-window';
+        wrap.innerHTML = '<div class="vm-info-window__content"></div>';
+        el.appendChild(wrap);
+        el._vmInfoWindow = wrap;
+    }
+
+    const customClass = el.getAttribute('info-class');
+    el._vmInfoWindow.className = 'vm-info-window' + (customClass ? ' ' + customClass : '');
+    el._vmInfoWindow.style.display = '';
+    vmSetInfoHtml(el, infoHtml);
+
+    let closeBtn = el._vmInfoWindow.querySelector('.vm-info-window__close');
+    if (el.hasAttribute('info-closable') && !closeBtn) {
+        closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'vm-info-window__close';
+        closeBtn.setAttribute('aria-label', 'Infobox schließen');
+        closeBtn.innerHTML = '✕';
+        closeBtn.addEventListener('click', () => {
+            el.setAttribute('info-visible', 'false');
+            if (el._vmInfoWindow) el._vmInfoWindow.style.display = 'none';
+        });
+        el._vmInfoWindow.appendChild(closeBtn);
+    } else if (!el.hasAttribute('info-closable') && closeBtn) {
+        closeBtn.remove();
+    }
+
+    const infoPos = vmNormalizeControlPosition(el.getAttribute('info-position'), 'top-left');
+    vmSetCornerVars(el, 'vm-info', infoPos, parseFloat(el.getAttribute('info-offset') || '12'), 0);
+}
+
+function vmAttachElementApi(el) {
+    if (el._vmApiAttached) return;
+    el._vmApiAttached = true;
+
+    el.setInfoHtml = (html) => {
+        el.setAttribute('info-html', String(html));
+        if (el._vmMapBuilt) vmApplyInfoWindow(el);
+    };
+    el.showInfoWindow = () => {
+        el.setAttribute('info-visible', 'true');
+        if (el._vmMapBuilt) vmApplyInfoWindow(el);
+    };
+    el.hideInfoWindow = () => {
+        el.setAttribute('info-visible', 'false');
+        if (el._vmMapBuilt && el._vmInfoWindow) el._vmInfoWindow.style.display = 'none';
+    };
+    el.setInfoPosition = (pos) => {
+        el.setAttribute('info-position', String(pos));
+        if (el._vmMapBuilt) vmApplyInfoWindow(el);
+    };
+}
+
+function vmObserveDynamicAttributes(el) {
+    if (el._vmObserver) return;
+    const dynamicAttrs = new Set([
+        'controls-position', 'controls-cluster', 'fullscreen-position',
+        'buttons-position', 'locate-position', 'satellite-position', 'buttons-offset', 'buttons-gap',
+        'controls-style',
+        'route-panel-position', 'route-panel-offset', 'route-panel-style',
+        'info-html', 'info-position', 'info-offset', 'info-class', 'info-visible', 'info-closable',
+    ]);
+
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((m) => {
+            if (m.type !== 'attributes') return;
+            if (!dynamicAttrs.has(m.attributeName)) return;
+            if (m.attributeName.includes('info-')) {
+                vmApplyInfoWindow(el);
+                return;
+            }
+            if (m.attributeName.startsWith('route-panel-')) {
+                vmApplyRoutePanelPosition(el);
+                return;
+            }
+            if (m.attributeName === 'controls-style') {
+                vmApplyControlsStylePreset(el);
+                return;
+            }
+            vmApplyOverlayPositions(el);
+        });
+    });
+
+    observer.observe(el, { attributes: true });
+    el._vmObserver = observer;
+}
+
+/**
+ * Erstellt die MapLibre-Karte für ein <vectormap>-Element.
+ * Wird von initVectorMap() aufgerufen — lazy sobald das Element in den Viewport scrollt.
+ * @param {HTMLElement} el
+ */
+/** Alle aktiven Map-Instanzen (FIFO – älteste wird bei Limit destroyed) */
+const VM_ACTIVE_MAPS = [];
+const VM_MAX_MAPS = 10;
+
+function vmRegisterMap(map) {
+    VM_ACTIVE_MAPS.push(map);
+    // entfernte Karten (Element weg, PJAX) aus der Liste nehmen – sonst wächst sie und hält alte Karten im Speicher
+    map.once('remove', () => {
+        const i = VM_ACTIVE_MAPS.indexOf(map);
+        if (i !== -1) VM_ACTIVE_MAPS.splice(i, 1);
+    });
+    while (VM_ACTIVE_MAPS.length > VM_MAX_MAPS) {
+        // die älteste Karte, die gerade nicht zu sehen ist (sichtbare nie abbauen)
+        const visible = (m) => {
+            const r = m.getContainer().getBoundingClientRect();
+            return r.bottom > 0 && r.top < window.innerHeight;
+        };
+        const victim = VM_ACTIVE_MAPS.find((m) => m !== map && !visible(m));
+        if (!victim) break;
+        try { victim.remove(); } catch (_) { VM_ACTIVE_MAPS.splice(VM_ACTIVE_MAPS.indexOf(victim), 1); }
+    }
+}
+
+/** Sequentielle Build-Queue — verhindert gleichzeitigen WebGL-Context-Aufbau */
+const VM_BUILD_QUEUE = [];
+let   VM_BUILD_RUNNING = false;
+
+function vmEnqueueBuild(el) {
+    VM_BUILD_QUEUE.push(el);
+    if (!VM_BUILD_RUNNING) vmDrainBuildQueue();
+}
+
+function vmDrainBuildQueue() {
+    if (VM_BUILD_QUEUE.length === 0) { VM_BUILD_RUNNING = false; return; }
+    VM_BUILD_RUNNING = true;
+    const el = VM_BUILD_QUEUE.shift();
+    // ein Fehler bei einer Karte (z. B. kein WebGL2) darf die übrigen nicht aufhalten
+    try { vmBuildMap(el); } catch (err) { vmShowMapError(el, err); }
+    // 150 ms Pause zwischen Maps — WebGL-Context sauber aufgebaut
+    setTimeout(vmDrainBuildQueue, 150);
+}
+
+/**
+ * Fehlende Sprite-Icons durch ein leeres 1×1-Bild ersetzen (verhindert Console-Spam).
+ * MapLibre 6: Bilder liefert setMissingStyleImageResolver (styleimagemissing meldet nur noch).
+ */
+function vmIgnoreMissingImages(map) {
+    const blank = (id) => { if (!map.hasImage(id)) map.addImage(id, { width: 1, height: 1, data: new Uint8ClampedArray(4) }); };
+    if (typeof map.setMissingStyleImageResolver === 'function') map.setMissingStyleImageResolver(blank);
+    else map.on('styleimagemissing', (e) => blank(e.id));
+}
+
+/** Statt einer leeren Fläche: Hinweis, warum die Karte fehlt (MapLibre 6 braucht WebGL2) */
+function vmShowMapError(el, err) {
+    console.warn('<vectormap> Karte konnte nicht erzeugt werden:', err);
+    const gpu = err && (err.name === 'GPUInitializationError' || /webgl/i.test(String(err.message || '')));
+    const box = document.createElement('div');
+    box.className = 'vm-map-error';
+    box.setAttribute('role', 'note');
+    box.textContent = gpu
+        ? 'Die Karte kann in diesem Browser nicht angezeigt werden (WebGL2 wird benötigt).'
+        : 'Die Karte konnte nicht geladen werden.';
+    (el._vmMapContainer || el).appendChild(box);
+}
+
+function vmBuildMap(el) {
+    if (el._vmMapBuilt) return;
+    el._vmMapBuilt = true;
+
+    // center="lat,lng" hat Priorität, dann einzelne lat/lng-Attribute, sonst Deutschland-Mitte
+    let startLat, startLng;
+    const centerStr = el.getAttribute('center');
+    const latAttr   = el.getAttribute('lat');
+    const lngAttr   = el.getAttribute('lng');
+    if (centerStr) {
+        [startLat, startLng] = centerStr.split(',').map(Number);
+    } else if (latAttr && lngAttr) {
+        startLat = parseFloat(latAttr);
+        startLng = parseFloat(lngAttr);
+    } else {
+        startLat = 51.165691;
+        startLng = 10.451526;
+    }
+    const zoom        = parseFloat(el.getAttribute('zoom')      || '6');
+    const pitch       = parseFloat(el.getAttribute('pitch')     || '0');
+    const bearing     = parseFloat(el.getAttribute('bearing')   || '0');
+    const mapStyle    = el.getAttribute('map-style') || 'liberty';
+    const controlsPos = vmResolveControlsPosition(el, 'top-right');
+    const interactive = el.getAttribute('interactive') !== 'false';
+    const minZoom     = el.hasAttribute('min-zoom') ? parseFloat(el.getAttribute('min-zoom')) : 0;
+    const maxZoom     = el.hasAttribute('max-zoom') ? parseFloat(el.getAttribute('max-zoom')) : 22;
+    // Sprache: Attribut > html[lang]-Attribut > navigator.language > 'de'
+    const lang = el.getAttribute('language')
+        || (document.documentElement.lang || navigator.language || 'de').slice(0, 2);
+    // Theme: 'theme'-Attribut ODER map-style falls kein bekannter OFM-Stil und kein Raster-Stil
+    const isRaster    = VM_RASTER_STYLES.includes(mapStyle);
+    const isThemeStyle = !isRaster && !VM_OFM_STYLES.includes(mapStyle) && !VM_EXTRA_STYLES[mapStyle] && !mapStyle.startsWith('http');
+    const activeTheme  = el.getAttribute('theme') || (isThemeStyle ? mapStyle : null);
+
+    // Karten-Container
+    const container = document.createElement('div');
+    container.className = 'vm-map-pane';
+    container.style.width  = '100%';
+    container.style.height = '100%';
+    el.appendChild(container);
+    el._vmMapContainer = container;
+
+    const map = new maplibregl.Map({
+        container,
+        style: vmProxyStyleUrl(mapStyle),
+        validateStyle: false,
+        center: [startLng, startLat],
+        zoom,
+        minZoom,
+        maxZoom,
+        pitch,
+        bearing,
+        maxPitch: 60,
+        interactive,
+        attributionControl: !el.hasAttribute('no-attribution'),
+        transformRequest: (url) => vmTransformRequest(url),
+    });
+
+    el._vmMap = map;
+    vmApplyControlsStylePreset(el);
+    vmAttachElementApi(el);
+    vmObserveDynamicAttributes(el);
+    map._vmEl = el;  // Rueckwaerts-Referenz fuer Theme-Fade-in
+    map._vmBaseStyle = mapStyle.startsWith('http') || VM_EXTRA_STYLES[mapStyle] ? mapStyle : vmResolveBaseStyle(mapStyle);
+    // basemap.de hat keine Namen in anderen Sprachen – Beschriftung nicht umstellen (sonst blieben Felder leer)
+    map._vmNoLanguage = mapStyle.startsWith('basemap-de');
+    vmRegisterMap(map);
+
+    // Karte erst einblenden wenn Theme angewendet wurde (verhindert Flash of Unstyled Map)
+    if (activeTheme && !isRaster) {
+        el.classList.add('vm-has-theme');
+        // Einblend-Dauer per Attribut steuerbar: theme-transition="600" (ms), Default 350
+        const tranMs = parseInt(el.getAttribute('theme-transition') || '350', 10);
+        el.style.setProperty('--vm-theme-transition', (tranMs / 1000).toFixed(2) + 's');
+    }
+
+    // Fehlende Sprite-Icons stumm ignorieren (verhindert Console-Spam)
+    vmIgnoreMissingImages(map);
+
+    if (!el.hasAttribute('no-navigation')) {
+        map.addControl(new maplibregl.NavigationControl(), controlsPos);
+    }
+
+    // Optional: Fullscreen-Control
+    if (el.hasAttribute('fullscreen')) {
+        const fsPos = vmNormalizeControlPosition(el.getAttribute('fullscreen-position'), controlsPos);
+        map.addControl(new VMFullscreenControl(), fsPos);
+    }
+
+    if (el.hasAttribute('locate')) {
+        vmAddLocateButton(el, map);
+    }
+
+    if (el.hasAttribute('show-satellite')) {
+        vmAddSatelliteToggle(el, map, mapStyle);
+    }
+
+    vmApplyOverlayPositions(el);
+    vmApplyInfoWindow(el);
+
+    // Route-Panel (interaktive Adresssuche) — vor map.on('load') damit Panel sofort im DOM ist
+    if (el.hasAttribute('route-panel')) {
+        vmAddRoutePanel(el, map);
+    }
+
+    // „In Karten-App öffnen“ ohne Route-Panel: eigener Knopf auf der Karte
+    if (el.hasAttribute('map-apps') && !el.hasAttribute('route-panel')) {
+        const appsPos = vmNormalizeControlPosition(el.getAttribute('map-apps-position'), 'bottom-left');
+        map.addControl(new VMMapAppsControl(el), appsPos);
+    }
+
+    const has3d = el.hasAttribute('3d');
+
+    // Nearby-Suche hat eigenen load-Handler, damit Geolocation-Wartezeit korrekt gehandelt wird
+    if (el.hasAttribute('nearby')) {
+        const nearbyFilter = el.getAttribute('nearby');
+        const nearbyRadius = parseInt(el.getAttribute('nearby-radius') || '1000', 10);
+        const nearbyLabel  = el.getAttribute('nearby-label') || '';
+        const nearbyLocate = el.hasAttribute('nearby-locate');
+
+        map.on('load', () => {
+            if (!isRaster) { vmSetLanguage(map, lang); vmFixExtrusionLayers(map); }
+            if (has3d && !isRaster) vmAdd3dBuildings(map);
+            vmAddMarkers(el, map);
+            vmLoadGeoJson(el, map);
+            if (activeTheme && !isRaster) vmLoadAndApplyTheme(map, activeTheme);
+            if (nearbyLocate) {
+                vmStartNearbyWithLocate(el, map, nearbyFilter, nearbyRadius, nearbyLabel);
+            } else {
+                const c = map.getCenter();
+                vmFetchNearby(el, map, nearbyFilter, nearbyRadius, nearbyLabel, c.lat, c.lng);
+            }
+        });
+    } else {
+        map.on('load', () => {
+            // Sprache setzen (nur bei Vektor-Stilen)
+            if (!isRaster) { vmSetLanguage(map, lang); vmFixExtrusionLayers(map); }
+            if (has3d && !isRaster) vmAdd3dBuildings(map);
+            vmAddMarkers(el, map);
+            vmLoadGeoJson(el, map);
+
+            // Automatisches Routing nur wenn KEIN interaktives Panel vorhanden
+            const routeFrom = el.getAttribute('route-from');
+            const routeTo   = el.getAttribute('route-to');
+            if (routeFrom && routeTo && !el.hasAttribute('route-panel')) {
+                vmDrawRoute(el, map, routeFrom, routeTo, el.getAttribute('route-mode') || 'driving');
+            }
+
+            const flyTo = el.getAttribute('fly-to');
+            if (flyTo) {
+                const [fLat, fLng, fZoom] = flyTo.split(',').map(Number);
+                const delay = parseInt(el.getAttribute('fly-delay') || '0', 10);
+
+                // Erst fliegen wenn das Element wirklich im Viewport sichtbar ist
+                const doFly = () => setTimeout(() => map.flyTo({
+                    center:   [fLng, fLat],
+                    zoom:     fZoom || (zoom + 5),
+                    duration: 2500,
+                }), delay);
+
+                if ('IntersectionObserver' in window) {
+                    let hasFired = false;
+                    const obs = new IntersectionObserver((entries) => {
+                        if (!hasFired && entries[0].isIntersecting) {
+                            hasFired = true;
+                            obs.disconnect();
+                            doFly();
+                        }
+                    }, { threshold: 0.25 });
+                    obs.observe(el);
+                } else {
+                    // Fallback: sofort fliegen
+                    doFly();
+                }
+            }
+
+            // Theme anwenden (nach Routing/Markern, damit Layer-Reihenfolge stimmt)
+            if (activeTheme && !isRaster) vmLoadAndApplyTheme(map, activeTheme);
+        });
+    }
+
+    // Performance: vmFixExtrusionLayers nur einmal pro Style-Load ausführen.
+    // Vorher lief die teure JSON.stringify-Schleife bei JEDEM styledata-Event,
+    // was während flyTo()/Animationen die CPU auslastete und 3D-Gebäude ruckeln
+    // ließ. Flag wird bei 'style.load' zurückgesetzt (z.B. nach Satellit-Toggle).
+    if (!isRaster) {
+        let _extrusionPatched = false;
+        map.on('style.load', () => { _extrusionPatched = false; });
+        map.on('styledata', () => {
+            if (_extrusionPatched || !map.isStyleLoaded()) return;
+            vmFixExtrusionLayers(map);
+            _extrusionPatched = true;
+        });
+    }
+
+    // styledata: 3D-Gebäude + Theme-Wiederherstellung (z.B. nach Satellit-Toggle)
+    // Debounce-Flag verhindert Endlosschleife: setPaintProperty feuert selbst styledata
+    map.on('styledata', () => {
+        if (!map.isStyleLoaded() || map._vmApplyingTheme) return;
+        // aktueller Stil zählt (Satellit kann umgeschaltet sein), nicht der Startwert
+        const rasterNow = isRaster || !!map.getSource('satellite');
+        if (has3d && !rasterNow) vmAdd3dBuildings(map);
+        if (map._vmThemeColors && !rasterNow) {
+            map._vmApplyingTheme = true;
+            vmApplyTheme(map, map._vmThemeColors);
+            // Asynchron zuruecksetzen: styledata aus setPaintProperty kommt via rAF
+            requestAnimationFrame(() => { map._vmApplyingTheme = false; });
+        }
+    });
+
+    // Sprache über JS-API änderbar machen
+    el._vmLang = lang;
+    el.setLanguage = (newLang) => {
+        el._vmLang = newLang;
+        vmSetLanguage(map, newLang);
+    };
+}
+
+function vmAdd3dBuildings(map) {
+    if (map.getLayer('vm-el-3d')) return;
+    const sources = map.getStyle().sources;
+    const srcName = Object.keys(sources).find(k => sources[k].type === 'vector') || 'openmaptiles';
+    map.addLayer({
+        id:            'vm-el-3d',
+        source:        srcName,
+        'source-layer': 'building',
+        filter:        ['!=', ['get', 'hide_3d'], true],
+        type:          'fill-extrusion',
+        minzoom:       15,
+        paint: {
+            'fill-extrusion-color':   '#aaa',
+            'fill-extrusion-height':  ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]],
+            'fill-extrusion-base':    ['interpolate', ['linear'], ['zoom'], 15, 0, 15.05, ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0]],
+            'fill-extrusion-opacity': 0.85,
+        },
+    });
+}
+
+/**
+ * Erstellt ein DOM-Element für einen benutzerdefinierten Marker (icon / html).
+ * @param {{icon?: string, html?: string, size?: number[], anchor?: string}} m
+ * @returns {HTMLElement|null}
+ */
+function vmCreateMarkerEl(m) {
+    if (m.html) {
+        const div = document.createElement('div');
+        div.className = 'vm-custom-marker';
+        div.innerHTML = m.html;
+        return div;
+    }
+    if (m.icon) {
+        const img = document.createElement('img');
+        img.src = m.icon;
+        img.className = 'vm-icon-marker';
+        img.alt = '';
+        if (m.size && m.size.length >= 2) {
+            img.style.width  = m.size[0] + 'px';
+            img.style.height = m.size[1] + 'px';
+        } else {
+            img.style.width  = '32px';
+            img.style.height = '32px';
+        }
+        return img;
+    }
+    return null;
+}
+
+/**
+ * Liefert den konfigurierten Fokusmodus für Popups.
+ * Erlaubte Werte: restore | canvas | none
+ * @param {HTMLElement|null|undefined} el
+ * @param {'restore'|'canvas'|'none'} fallback
+ * @returns {'restore'|'canvas'|'none'}
+ */
+function vmGetPopupFocusMode(el, fallback = 'restore') {
+    const raw = el && el.getAttribute ? String(el.getAttribute('popup-focus-mode') || '').toLowerCase() : '';
+    if (raw === 'restore' || raw === 'canvas' || raw === 'none') return raw;
+    return fallback;
+}
+
+/**
+ * Verbessert Keyboard-/Focus-Verhalten für Marker-Popups:
+ * - Marker wird per Tastatur fokussier- und auslösbar
+ * - Beim Öffnen via Tastatur erhält der Close-Button den Fokus
+ * - Beim Schließen springt der Fokus zurück zum auslösenden Marker
+ * @param {maplibregl.Marker} marker
+ * @param {maplibregl.Popup} popup
+ * @param {HTMLElement|null} el
+ */
+function vmBindPopupA11y(marker, popup, el = null) {
+    // Hinweis: Alle Popups werden mit focusAfterOpen: false erzeugt. MapLibre würde sonst den Fokus
+    // auf den Schließen-Button setzen – bei automatisch geöffneten Popups (z. B. route-to) scrollt
+    // der Browser dann beim Seitenaufruf zur Karte. Den Fokus für Tastaturnutzer setzt diese Funktion.
+    if (!marker || !popup) return;
+
+    const triggerEl = marker.getElement && marker.getElement();
+    if (!triggerEl) return;
+
+    let openedViaKeyboard = false;
+    let focusRestoreTarget = null;
+    const focusMode = vmGetPopupFocusMode(el, 'restore');
+
+    // Marker für Keyboard-Nutzung vorbereiten
+    triggerEl.classList.add('vm-marker-focusable');
+    if (!triggerEl.hasAttribute('tabindex')) {
+        triggerEl.setAttribute('tabindex', '0');
+    }
+    if (!triggerEl.hasAttribute('role')) {
+        triggerEl.setAttribute('role', 'button');
+    }
+    if (!triggerEl.hasAttribute('aria-label')) {
+        triggerEl.setAttribute('aria-label', 'Kartenmarker öffnen');
+    }
+
+    triggerEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        openedViaKeyboard = true;
+        focusRestoreTarget = triggerEl;
+        marker.togglePopup();
+    });
+
+    triggerEl.addEventListener('click', () => {
+        openedViaKeyboard = false;
+        focusRestoreTarget = triggerEl;
+    });
+
+    popup.on('open', () => {
+        const popupEl = popup.getElement();
+        if (!popupEl) return;
+
+        popupEl.setAttribute('role', 'dialog');
+        popupEl.setAttribute('aria-modal', 'false');
+
+        const closeBtn = popupEl.querySelector('.maplibregl-popup-close-button');
+        if (closeBtn) {
+            closeBtn.setAttribute('aria-label', 'Popup schließen');
+            if (openedViaKeyboard) {
+                requestAnimationFrame(() => closeBtn.focus());
+            }
+        }
+    });
+
+    popup.on('close', () => {
+        if (focusMode === 'restore' && focusRestoreTarget && document.contains(focusRestoreTarget)) {
+            focusRestoreTarget.focus();
+        }
+        openedViaKeyboard = false;
+    });
+}
+
+/**
+ * Fokusmanagement für Popups ohne Marker-Trigger (z.B. Layer-Klicks).
+ * @param {maplibregl.Map} map
+ * @param {maplibregl.Popup} popup
+ * @param {HTMLElement|null} el
+ */
+function vmBindFeaturePopupA11y(map, popup, el = null) {
+    if (!map || !popup) return;
+
+    const canvas = map.getCanvas();
+    if (!canvas.hasAttribute('tabindex')) canvas.setAttribute('tabindex', '0');
+
+    const activeEl = document.activeElement;
+    const restoreTarget = (el && activeEl && el.contains(activeEl)) ? activeEl : canvas;
+    const focusMode = vmGetPopupFocusMode(el, 'canvas');
+
+    popup.on('open', () => {
+        const popupEl = popup.getElement();
+        if (!popupEl) return;
+
+        popupEl.setAttribute('role', 'dialog');
+        popupEl.setAttribute('aria-modal', 'false');
+
+        const closeBtn = popupEl.querySelector('.maplibregl-popup-close-button');
+        if (closeBtn) {
+            closeBtn.setAttribute('aria-label', 'Popup schließen');
+            requestAnimationFrame(() => closeBtn.focus());
+        }
+    });
+
+    popup.on('close', () => {
+        if (focusMode === 'none') return;
+        if (focusMode === 'canvas') {
+            if (document.contains(canvas)) canvas.focus();
+            return;
+        }
+        if (restoreTarget && document.contains(restoreTarget) && typeof restoreTarget.focus === 'function') {
+            restoreTarget.focus();
+        }
+    });
+}
+
+function vmAddMarkers(el, map) {
+    const markerStr = el.getAttribute('markers');
+    if (!markerStr) return;
+    let markers;
+    try { markers = JSON.parse(markerStr); } catch (e) {
+        console.warn('<vectormap> markers JSON ungültig:', e); return;
+    }
+    if (el.hasAttribute('cluster')) {
+        vmAddClusteredMarkers(el, map, markers);
+    } else {
+        markers.forEach(m => {
+            const markerEl   = vmCreateMarkerEl(m);
+            const markerOpts = markerEl
+                ? { element: markerEl, anchor: m.anchor || 'bottom' }
+                : { color: m.color || '#2b7095' };
+            const marker = new maplibregl.Marker(markerOpts)
+                .setLngLat([parseFloat(m.lng), parseFloat(m.lat)]);
+            if (m.popup || m.label) {
+                const popup = new maplibregl.Popup({ focusAfterOpen: false, offset: 25 }).setHTML(m.popup || m.label);
+                marker.setPopup(popup);
+                vmBindPopupA11y(marker, popup, el);
+            }
+            marker.addTo(map);
+        });
+    }
+    // Kartenausschnitt an alle Marker anpassen (wenn > 1 Marker und nicht deaktiviert)
+    if (markers.length > 1 && el.getAttribute('fit-bounds') !== 'false') {
+        vmFitMarkerBounds(map, markers);
+    }
+}
+
+/**
+ * Passt den Kartenausschnitt so an, dass alle Marker sichtbar sind.
+ * @param {maplibregl.Map} map
+ * @param {Array<{lat: number|string, lng: number|string}>} markers
+ */
+function vmFitMarkerBounds(map, markers) {
+    const first = [parseFloat(markers[0].lng), parseFloat(markers[0].lat)];
+    const bounds = markers.reduce(
+        (b, m) => b.extend([parseFloat(m.lng), parseFloat(m.lat)]),
+        new maplibregl.LngLatBounds(first, first)
+    );
+    map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 500 });
+}
+
+function vmAddClusteredMarkers(el, map, markers) {
+    const geojson = {
+        type: 'FeatureCollection',
+        features: markers.map(m => ({
+            type: 'Feature',
+            properties: { popup: m.popup || m.label || '', color: m.color || '#2b7095' },
+            geometry:   { type: 'Point', coordinates: [parseFloat(m.lng), parseFloat(m.lat)] },
+        })),
+    };
+
+    // Einzigartiger Quell-Name pro Karte (mehrere Karten auf einer Seite)
+    const srcId = 'vm-cluster-' + Math.random().toString(36).slice(2, 7);
+    map.addSource(srcId, {
+        type: 'geojson', data: geojson,
+        cluster: true, clusterMaxZoom: 14, clusterRadius: 50,
+    });
+
+    // Cluster-Kreis
+    map.addLayer({ id: srcId + '-c', type: 'circle', source: srcId, filter: ['has', 'point_count'],
+        paint: {
+            'circle-color':   ['step', ['get', 'point_count'], '#2b7095', 10, '#1a5276', 30, '#0e3347'],
+            'circle-radius':  ['step', ['get', 'point_count'], 18, 10, 26, 30, 36],
+            'circle-opacity': 0.88,
+        },
+    });
+    // Anzahl im Cluster
+    map.addLayer({ id: srcId + '-n', type: 'symbol', source: srcId, filter: ['has', 'point_count'],
+        layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12 },
+        paint:  { 'text-color': '#fff' },
+    });
+    // Einzel-Punkte
+    map.addLayer({ id: srcId + '-p', type: 'circle', source: srcId, filter: ['!', ['has', 'point_count']],
+        paint: { 'circle-color': '#2b7095', 'circle-radius': 7, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' },
+    });
+
+    // Klick auf Cluster → zoom rein
+    map.on('click', srcId + '-c', async (e) => {
+        const clusterId = e.features[0].properties.cluster_id;
+        const zoom = await map.getSource(srcId).getClusterExpansionZoom(clusterId);
+        map.easeTo({ center: e.features[0].geometry.coordinates, zoom });
+    });
+
+    // Klick auf Einzel-Punkt → Popup
+    map.on('click', srcId + '-p', (e) => {
+        const { popup } = e.features[0].properties;
+        if (!popup) return;
+        const featurePopup = new maplibregl.Popup({ focusAfterOpen: false })
+            .setLngLat(e.features[0].geometry.coordinates.slice())
+            .setHTML(popup)
+            .addTo(map);
+        vmBindFeaturePopupA11y(map, featurePopup, el);
+    });
+
+    [srcId + '-c', srcId + '-p'].forEach(layer => {
+        map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+    });
+}
+
+/**
+ * Entfernt eine bestehende Route (Layer, Source, Marker, Badge) von der Karte.
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ */
+function vmClearRoute(el, map) {
+    // Unterstützt sowohl einzelne OSRM-Layer als auch mehrere Transit-Legs
+    const layers  = el._vmRouteLayers  || ['vm-route-casing', 'vm-route-line'];
+    const sources = el._vmRouteSources || ['vm-route'];
+    layers.forEach(id  => { try { if (map.getLayer(id))  map.removeLayer(id);  } catch (_) {} });
+    sources.forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
+    el._vmRouteLayers  = null;
+    el._vmRouteSources = null;
+    if (el._vmRouteMarkers) {
+        el._vmRouteMarkers.forEach(m => m.remove());
+        el._vmRouteMarkers = [];
+    }
+    const badge = el.querySelector('.vm-route-badge');
+    if (badge) badge.remove();
+}
+
+/**
+ * Konvertiert einen Eingabe-String in [lat, lng].
+ * Akzeptiert:
+ *   - Koordinaten: "52.52,13.405" (lat,lng)
+ *   - Adressen:    "Unter den Linden 1, Berlin"
+ * Adressen werden über den Proxy an Nominatim geocodiert und gecacht.
+ * @param {string} input
+ * @returns {Promise<[number, number, string]>} [lat, lng, label]
+ */
+async function vmResolveLocation(input) {
+    const trimmed = input.trim();
+    // Koordinaten-Pattern: -?Zahl,Zahl (Lat,Lng)
+    if (/^-?\d+\.?\d*\s*,\s*-?\d+\.?\d*$/.test(trimmed)) {
+        const [lat, lng] = trimmed.split(',').map(Number);
+        return [lat, lng, trimmed];
+    }
+    // Adresse → Nominatim via Proxy)
+    const nominatimUrl = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(trimmed);
+    const resp = await fetch(vmProxyUrl(nominatimUrl));
+    if (!resp.ok) throw new Error('Geocoding-Fehler: HTTP ' + resp.status);
+    const data = await resp.json();
+    if (!data || !data[0]) throw new Error('Adresse nicht gefunden: ' + trimmed);
+    const lat = parseFloat(data[0].lat);
+    const lng = parseFloat(data[0].lon);
+    const label = data[0].display_name
+        ? data[0].display_name.split(',').slice(0, 2).join(', ') // körzen
+        : trimmed;
+    return [lat, lng, label];
+}
+
+/**
+ * Gibt ein Pfeil-/Symbol-Zeichen für ein OSRM-Maneuver-Objekt zurück.
+ * @param {{type:string, modifier:string}} maneuver
+ */
+function vmManeuverIcon(maneuver) {
+    const t = maneuver.type     || '';
+    const m = maneuver.modifier || '';
+    if (t === 'depart')  return '▶';
+    if (t === 'arrive')  return '⚑';
+    if (t === 'roundabout' || t === 'rotary') return '↻';
+    if (t === 'exit roundabout' || t === 'exit rotary') return '↗';
+    if (m === 'uturn')          return '↩';
+    if (m === 'sharp left')     return '↰';
+    if (m === 'sharp right')    return '↱';
+    if (m === 'left')           return '←';
+    if (m === 'right')          return '→';
+    if (m === 'slight left')    return '↖';
+    if (m === 'slight right')   return '↗';
+    return '↑'; // straight, new name, continue, end of road
+}
+
+/**
+ * Gibt einen deutschen Beschriftungstext für einen OSRM-Step zurück.
+ * @param {{name:string, maneuver:{type:string, modifier:string}}} step
+ */
+function vmManeuverLabel(step) {
+    const t    = step.maneuver.type     || '';
+    const m    = step.maneuver.modifier || '';
+    const name = step.name || '';
+    const dirs = {
+        'left':         'links',
+        'right':        'rechts',
+        'slight left':  'leicht links',
+        'slight right': 'leicht rechts',
+        'sharp left':   'scharf links',
+        'sharp right':  'scharf rechts',
+        'straight':     'geradeaus',
+        'uturn':        'wenden',
+    };
+    if (t === 'depart')                                     return name ? 'Start: ' + name : 'Startpunkt';
+    if (t === 'arrive')                                     return name ? 'Ziel: '  + name : 'Ziel erreicht';
+    if (t === 'roundabout' || t === 'rotary')               return 'Kreisverkehr' + (name ? ': ' + name : '');
+    if (t === 'exit roundabout' || t === 'exit rotary')     return name || 'Ausfahrt';
+    if (t === 'off ramp' || t === 'on ramp')                return name || (t === 'off ramp' ? 'Ausfahrt' : 'Auffahrt');
+    if (name) return name;
+    const dir = dirs[m];
+    return dir ? dir.charAt(0).toUpperCase() + dir.slice(1) : 'Weiterfahren';
+}
+
+/**
+ * Formatiert eine Meter-Distanz als lesbaren String.
+ * @param {number} meters
+ */
+function vmFormatDistStep(meters) {
+    if (!meters) return '';
+    if (meters >= 1000) return (meters / 1000).toFixed(1) + ' km';
+    return Math.round(meters) + ' m';
+}
+
+/**
+ * Rendert die Abbiegehinweis-Liste in das Route-Panel.
+ * Ersetzt eine evtl. vorhandene ältere Liste.
+ * @param {HTMLElement} panel  Das .vm-route-panel-Element
+ * @param {Array}       steps  OSRM-Step-Array
+ * @param {maplibregl.Map} map
+ */
+function vmRenderSteps(panel, steps, map) {
+    const old = panel.querySelector('.vm-rp-steps');
+    if (old) old.remove();
+    if (!steps || !steps.length) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'vm-rp-steps';
+
+    const header = document.createElement('div');
+    header.className = 'vm-rp-steps-header';
+    header.innerHTML = `<span class="vm-rp-steps-toggle">▾</span><span>Abbiegehinweise</span><span class="vm-rp-steps-count">${steps.length}</span>`;
+
+    const list = document.createElement('div');
+    list.className = 'vm-rp-steps-list';
+
+    steps.forEach(step => {
+        const [lng, lat] = step.maneuver.location;
+        const icon  = vmManeuverIcon(step.maneuver);
+        const label = vmManeuverLabel(step);
+        const dist  = vmFormatDistStep(step.distance);
+        const item  = document.createElement('div');
+        item.className = 'vm-rp-step';
+        item.innerHTML =
+            `<span class="vm-rp-step-icon">${icon}</span>` +
+            `<span class="vm-rp-step-text">${label}</span>` +
+            `<span class="vm-rp-step-dist">${dist}</span>`;
+        item.addEventListener('click', () => map.flyTo({ center: [lng, lat], zoom: 16, duration: 700 }));
+        list.appendChild(item);
+    });
+
+    let open = true;
+    header.addEventListener('click', () => {
+        open = !open;
+        list.style.display = open ? '' : 'none';
+        header.querySelector('.vm-rp-steps-toggle').textContent = open ? '▾' : '▸';
+    });
+
+    wrap.appendChild(header);
+    wrap.appendChild(list);
+    panel.appendChild(wrap);
+}
+
+async function vmDrawRoute(el, map, fromStr, toStr, mode) {
+    let fromLat, fromLng, fromLabel, toLat, toLng, toLabel;
+    try {
+        [fromLat, fromLng, fromLabel] = await vmResolveLocation(fromStr);
+        [toLat,   toLng,   toLabel]   = await vmResolveLocation(toStr);
+    } catch (resErr) {
+        console.warn('<vectormap> Geocoding fehlgeschlagen:', resErr);
+        return;
+    }
+
+    // Bestehende Route entfernen bevor neue gezeichnet wird
+    vmClearRoute(el, map);
+
+    // OSRM-Backends: Jedes Fahrprofil hat einen eigenen öffentlichen Server
+    const vmOsrmBackends = {
+        driving: 'https://router.project-osrm.org/route/v1/driving',
+        cycling: 'https://routing.openstreetmap.de/routed-bike/route/v1/driving',
+        walking: 'https://routing.openstreetmap.de/routed-foot/route/v1/driving',
+    };
+    const backendUrl = vmOsrmBackends[mode] || vmOsrmBackends.driving;
+    const osrmUrl = `${backendUrl}/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=true`;
+    try {
+        const resp = await fetch(vmProxyUrl(osrmUrl));
+        const data = await resp.json();
+        if (!data.routes || !data.routes[0]) return;
+
+        const route = data.routes[0];
+        const geom  = route.geometry;
+
+        map.addSource('vm-route', { type: 'geojson', data: geom });
+        // Weißes Casing + blaue Linie
+        map.addLayer({ id: 'vm-route-casing', type: 'line', source: 'vm-route',
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            paint:  { 'line-color': '#fff', 'line-width': 7, 'line-opacity': 0.7 },
+        });
+        map.addLayer({ id: 'vm-route-line', type: 'line', source: 'vm-route',
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            paint:  { 'line-color': map._vmThemeColors?.route_line || '#2b7095', 'line-width': 4, 'line-opacity': 0.95 },
+        });
+        el._vmRouteLayers  = ['vm-route-casing', 'vm-route-line'];
+        el._vmRouteSources = ['vm-route'];
+
+        // Start- und Ziel-Marker (getrackt für vmClearRoute)
+        const fromMarker = new maplibregl.Marker({ color: '#27ae60' }).setLngLat([fromLng, fromLat])
+            .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setText('Start: ' + fromLabel)).addTo(map);
+        const toMarker = new maplibregl.Marker({ color: '#e74c3c' }).setLngLat([toLng, toLat])
+            .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setText('Ziel: ' + toLabel)).addTo(map);
+        vmBindPopupA11y(fromMarker, fromMarker.getPopup(), el);
+        vmBindPopupA11y(toMarker, toMarker.getPopup(), el);
+        el._vmRouteMarkers = [fromMarker, toMarker];
+
+        // Info-Badge
+        const dist = (route.distance / 1000).toFixed(1);
+        const mins = Math.round(route.duration / 60);
+        const modeLabels = { driving: 'Auto', cycling: 'Rad', walking: 'Fuß' };
+        const badge = document.createElement('div');
+        badge.className = 'vm-route-badge';
+        badge.innerHTML = `<span>${modeLabels[mode] || mode} ${dist}&thinsp;km</span><span>~&thinsp;${mins}&thinsp;min</span>`;
+        el.appendChild(badge);
+
+        // Steps für Turn-by-Turn speichern (flach über alle Legs)
+        el._vmRouteSteps = (route.legs || []).flatMap(leg => leg.steps || []);
+
+        // Bounds → Route komplett sichtbar
+        const coords = geom.coordinates;
+        const bounds = coords.reduce((b, c) => b.extend(c),
+            new maplibregl.LngLatBounds(coords[0], coords[0]));
+        map.fitBounds(bounds, { padding: 50 });
+    } catch (err) {
+        console.warn('<vectormap> Routing fehlgeschlagen:', err);
+    }
+}
+
+/**
+ * Fügt ein interaktives Route-Panel mit Adress-Autocomplete zur Karte hinzu.
+ * Aktiviert durch das Boolean-Attribut `route-panel`.
+ * Initiale Werte aus route-from / route-to / route-mode werden übernommen.
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ */
+
+
+
+function vmAddRoutePanel(el, map) {
+    const initFrom  = el.getAttribute('route-from') || '';
+    const initTo    = el.getAttribute('route-to')   || '';
+    const initMode  = el.getAttribute('route-mode') || 'driving';
+    const toLocked  = el.hasAttribute('route-to-locked');
+    const noSteps   = el.hasAttribute('route-no-steps');
+    const hasLocate = 'geolocation' in navigator;
+
+    // Locate-Button SVG (Crosshair)
+    const locateSvg = `<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round' width='16' height='16' aria-hidden='true'><path d='M12 22s6.5-4.2 6.5-10.2A6.5 6.5 0 1 0 5.5 11.8C5.5 17.8 12 22 12 22Z'/><circle cx='12' cy='11' r='2.2'/></svg>`;
+
+    const panel = document.createElement('div');
+    panel.className = 'vm-route-panel';
+    panel.innerHTML = `
+        <button type="button" class="vm-rp-toggle" aria-expanded="true"><span class="vm-rp-toggle-text">Route planen</span><span class="vm-rp-toggle-icon" aria-hidden="true"></span></button>
+        <div class="vm-rp-field">
+            <span class="vm-rp-label">Von</span>
+            <div class="vm-rp-input-wrap">
+                <input class="vm-rp-from" type="text" autocomplete="off"
+                    placeholder="Startadresse oder Koordinaten …"
+                    value="${initFrom.replace(/"/g, '&quot;')}">
+                <div class="vm-rp-suggestions"></div>
+            </div>
+            ${hasLocate ? `<button type="button" class="vm-rp-locate" title="Meinen Standort verwenden">${locateSvg}</button>` : ''}
+        </div>
+        <div class="vm-rp-field">
+            <span class="vm-rp-label">Nach</span>
+            <div class="vm-rp-input-wrap">
+                <input class="vm-rp-to" type="text" autocomplete="off"
+                    placeholder="Zieladresse oder Koordinaten …"
+                    value="${initTo.replace(/"/g, '&quot;')}"
+                    ${toLocked ? 'readonly tabindex="-1"' : ''}>
+                <div class="vm-rp-suggestions"></div>
+            </div>
+        </div>
+        <div class="vm-rp-controls">
+            <div class="vm-rp-modes">
+                <button type="button" class="vm-rp-mode ${initMode === 'driving'  ? 'active' : ''}" data-mode="driving"  title="Auto"><svg viewBox='0 0 24 24' fill='currentColor' width='18' height='18' aria-hidden='true'><path d='M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z'/></svg></button>
+                <button type="button" class="vm-rp-mode ${initMode === 'walking'  ? 'active' : ''}" data-mode="walking"  title="Zu Fuß"><svg viewBox='0 0 24 24' fill='currentColor' width='18' height='18' aria-hidden='true'><path d='M13.49 5.48c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm-3.6 13.9l1-4.4 2.1 2v6h2v-7.5l-2.1-2 .6-3c1.3 1.5 3.3 2.5 5.5 2.5v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1l-5.2 2.2v4.7h2v-3.4l1.8-.7-1.6 8.1-4.9-1-.4 2 7 1.4z'/></svg></button>
+                <button type="button" class="vm-rp-mode ${initMode === 'cycling'  ? 'active' : ''}" data-mode="cycling"  title="Fahrrad"><svg viewBox='0 0 24 24' fill='currentColor' width='18' height='18' aria-hidden='true'><path d='M15.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM5 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5zm5.8-10l2.4-2.4.8.8c1.3 1.3 3 2.1 5 2.1V9c-1.5 0-2.7-.6-3.6-1.5l-1.9-1.9c-.5-.4-1-.6-1.6-.6s-1.1.2-1.4.6L7.8 8.4C7.3 8.8 7 9.4 7 10c0 .6.3 1.2.8 1.6L11 14v5h2v-6l-2.2-2.5zM19 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5z'/></svg></button>
+            </div>
+            <button type="button" class="vm-rp-calc">Route</button>
+            <button type="button" class="vm-rp-clear" style="display:none" title="Route l\u00f6schen">✕</button>
+        </div>`;
+
+    el.appendChild(panel);
+    el._vmRoutePanel = panel;
+    vmApplyRoutePanelPosition(el);
+
+    // „In Karten-App öffnen“: Ziel aus dem Feld „Nach“ (aktueller Wert beim Klick)
+    if (el.hasAttribute('map-apps')) {
+        const apps = vmMapAppsMenu(el, () => panel.querySelector('.vm-rp-to')?.value.trim() || vmMapAppsTarget(el));
+        apps.classList.add('vm-rp-apps');
+        panel.appendChild(apps);
+    }
+
+    // Side-Layout: Panel als eigene Spalte links/rechts neben der Karte anordnen
+    const layout = String(el.getAttribute('route-panel-layout') || '').toLowerCase();
+    const mapPane = el._vmMapContainer || el.firstElementChild;
+    if (mapPane && (layout === 'side-left' || layout === 'side-right')) {
+        if (layout === 'side-left') {
+            el.insertBefore(panel, mapPane);
+        } else {
+            el.appendChild(panel);
+        }
+        requestAnimationFrame(() => map.resize());
+    }
+
+    const fromInput = panel.querySelector('.vm-rp-from');
+    const toInput   = panel.querySelector('.vm-rp-to');
+    const calcBtn   = panel.querySelector('.vm-rp-calc');
+
+    // Kleine Karten (Handy): Panel als Leiste unten, einklappbar – sonst verdeckt es die Karte.
+    // Der Knopf ist nur bei schmaler Karte sichtbar (CSS: Container-Abfrage auf das Element).
+    const toggleBtn = panel.querySelector('.vm-rp-toggle');
+    const isCompact = () => el.classList.contains('vm-compact') || (el.clientWidth > 0 && el.clientWidth < 560);
+    const setCollapsed = (on, label) => {
+        panel.classList.toggle('vm-rp-collapsed', on);
+        toggleBtn.setAttribute('aria-expanded', on ? 'false' : 'true');
+        toggleBtn.querySelector('.vm-rp-toggle-text').textContent = label || (on ? 'Route planen' : 'Einklappen');
+        requestAnimationFrame(() => { try { map.resize(); } catch (_) { /* */ } });
+    };
+    toggleBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('vm-rp-collapsed')));
+    // schmale Karte: immer eingeklappt starten – bei vorgegebener Route mit „Route ändern“
+    if (isCompact()) setCollapsed(true, initFrom && initTo ? 'Route ändern' : undefined);
+    const clearBtn  = panel.querySelector('.vm-rp-clear');
+    const locateBtn = panel.querySelector('.vm-rp-locate');
+    let currentMode = initMode;
+
+    // Standort-Button: GPS-Koordinaten in Von-Feld eintragen
+    if (locateBtn) {
+        locateBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            locateBtn.classList.add('locating');
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    locateBtn.classList.remove('locating');
+                    const { latitude, longitude } = pos.coords;
+                    fromInput.value = latitude.toFixed(6) + ',' + longitude.toFixed(6);
+                },
+                () => { locateBtn.classList.remove('locating'); },
+                { enableHighAccuracy: true, timeout: 8000 }
+            );
+        });
+    }
+
+    // gesperrtes Ziel-Feld visuell kennzeichnen
+    if (toLocked) {
+        toInput.style.cssText += ';cursor:default;background:rgba(0,0,0,.04);color:inherit;';
+    }
+
+    // Modus-Buttons
+    panel.querySelectorAll('.vm-rp-mode').forEach(btn => {
+        btn.addEventListener('click', () => {
+            panel.querySelectorAll('.vm-rp-mode').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentMode = btn.dataset.mode;
+        });
+    });
+
+    // Autocomplete-Logik
+    function setupSuggest(input) {
+        const sugDiv = input.closest('.vm-rp-input-wrap').querySelector('.vm-rp-suggestions');
+        let timer;
+
+        input.addEventListener('input', () => {
+            clearTimeout(timer);
+            const q = input.value.trim();
+            // Koordinaten nicht geocodieren
+            if (q.length < 3 || /^-?\d/.test(q)) { hideSug(sugDiv); return; }
+            timer = setTimeout(() => fetchSug(q, input, sugDiv), 300);
+        });
+
+        // Suggestions schließen bei Klick außerhalb
+        document.addEventListener('click', (e) => {
+            if (!panel.contains(e.target)) hideSug(sugDiv);
+        }, { capture: true, signal: vmSignal(el) });
+    }
+
+    async function fetchSug(q, input, sugDiv) {
+        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&q=' + encodeURIComponent(q);
+        try {
+            const resp = await fetch(vmProxyUrl(url));
+            if (!resp.ok) return;
+            const data = await resp.json();
+            showSug(data, input, sugDiv);
+        } catch (_) {}
+    }
+
+    function showSug(results, input, sugDiv) {
+        sugDiv.innerHTML = '';
+        if (!results.length) { hideSug(sugDiv); return; }
+        results.forEach(r => {
+            const item = document.createElement('div');
+            item.className = 'vm-rp-suggestion';
+            item.textContent = r.display_name;
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // Blur verhindern
+                input.value = r.display_name;
+                hideSug(sugDiv);
+            });
+            sugDiv.appendChild(item);
+        });
+        sugDiv.classList.add('vm-rp-suggestions--open');
+    }
+
+    function hideSug(sugDiv) {
+        sugDiv.classList.remove('vm-rp-suggestions--open');
+        sugDiv.innerHTML = '';
+    }
+
+    setupSuggest(fromInput);
+    if (!toLocked) setupSuggest(toInput);  // kein Autocomplete wenn gesperrt
+
+    let showDestination = async () => {};
+
+    // Route berechnen
+    calcBtn.addEventListener('click', async () => {
+        const fromVal = fromInput.value.trim();
+        const toVal   = toInput.value.trim();
+        if (!fromVal || !toVal) return;
+
+        calcBtn.disabled = true;
+        calcBtn.textContent = '\u2026';
+        clearBtn.style.display = 'none';
+        try {
+            await vmDrawRoute(el, map, fromVal, toVal, currentMode);
+            if (!noSteps) vmRenderSteps(panel, el._vmRouteSteps, map);
+            clearBtn.style.display = '';
+            // Handy: nach der Berechnung einklappen, damit die Route sichtbar ist
+            if (isCompact()) setCollapsed(true, 'Route ändern');
+        } catch (e) {
+            console.warn('Route-Panel Fehler:', e);
+        } finally {
+            calcBtn.disabled = false;
+            calcBtn.textContent = 'Route';
+        }
+    });
+
+    // Route löschen
+    clearBtn.addEventListener('click', () => {
+        vmClearRoute(el, map);
+        const stepsDiv = panel.querySelector('.vm-rp-steps');
+        if (stepsDiv) stepsDiv.remove();
+        clearBtn.style.display = 'none';
+        // Bei gesperrtem Ziel: Ziel-Marker + Popup wiederherstellen
+        if (toLocked && initTo) showDestination();
+    });
+
+    // Auto-Berechnung wenn initiale Werte vorhanden
+    if (initFrom && initTo) {
+        const autoCalc = async () => {
+            await vmDrawRoute(el, map, initFrom, initTo, currentMode);
+            if (!noSteps) vmRenderSteps(panel, el._vmRouteSteps, map);
+            clearBtn.style.display = '';
+            if (isCompact()) setCollapsed(true, 'Route ändern');
+        };
+        if (map.isStyleLoaded()) {
+            autoCalc();
+        } else {
+            map.once('load', autoCalc);
+        }
+    }
+
+    // Nur Ziel bekannt → Adresse geocodieren, Marker + Kartenzentrierung
+    if (!initFrom && initTo) {
+        const customPopup = el.getAttribute('route-to-popup') || null;
+        showDestination = async () => {
+            try {
+                const [lat, lng, label] = await vmResolveLocation(initTo);
+                // Ein explizit gesetztes zoom-Attribut respektieren (Pitch/Bearing bleiben erhalten)
+                const destZoom = el.hasAttribute('zoom') ? (parseFloat(el.getAttribute('zoom')) || 14) : 14;
+                map.flyTo({ center: [lng, lat], zoom: destZoom, duration: 0 });
+                const popupHtml = customPopup || ('<strong>' + label + '</strong>');
+                const destPopup = new maplibregl.Popup({ focusAfterOpen: false, offset: 25, closeOnClick: false })
+                    .setHTML(popupHtml);
+                const destMarker = new maplibregl.Marker({ color: '#e74c3c' })
+                    .setLngLat([lng, lat])
+                    .setPopup(destPopup)
+                    .addTo(map);
+                vmBindPopupA11y(destMarker, destPopup, el);
+                destMarker.togglePopup(); // Popup sofort öffnen
+                if (!el._vmRouteMarkers) el._vmRouteMarkers = [];
+                el._vmRouteMarkers.push(destMarker);
+            } catch (_) {}
+        };
+        if (map.isStyleLoaded()) {
+            showDestination();
+        } else {
+            map.once('load', showDestination);
+        }
+    }
+}
+
+function vmAddLocateButton(el, map) {
+    const btn = document.createElement('button');
+    btn.className  = 'vm-locate-widget';
+    btn.type       = 'button';
+    btn.title      = 'Meinen Standort anzeigen';
+    btn.innerHTML  = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s6.5-4.2 6.5-10.2A6.5 6.5 0 1 0 5.5 11.8C5.5 17.8 12 22 12 22Z"/><circle cx="12" cy="11" r="2.2"/></svg>`;
+
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!navigator.geolocation) {
+            alert('Ihr Browser unterstützt keine Geolokalisierung.'); return;
+        }
+        btn.classList.add('vm-locating');
+        navigator.geolocation.getCurrentPosition(
+            pos => {
+                btn.classList.remove('vm-locating');
+                const { longitude, latitude } = pos.coords;
+                map.resize();
+                map.stop();
+                map.flyTo({ center: [longitude, latitude], zoom: 15, duration: 900 });
+                // ein Standort-Marker je Karte – bei erneutem Klick nur verschieben
+                if (el._vmUserMarker) {
+                    el._vmUserMarker.setLngLat([longitude, latitude]);
+                } else {
+                    const userMarker = new maplibregl.Marker({ color: '#2b7095' })
+                        .setLngLat([longitude, latitude])
+                        .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setText('Ihr Standort'))
+                        .addTo(map);
+                    vmBindPopupA11y(userMarker, userMarker.getPopup(), el);
+                    el._vmUserMarker = userMarker;
+                }
+            },
+            () => { btn.classList.remove('vm-locating'); }
+        );
+    });
+
+    el.appendChild(btn);
+}
+
+/**
+ * Fügt einen Satellitenbild-Toggle-Button zur Karte hinzu.
+ * Wechselt zwischen dem aktuellen Vektorstil und ESRI World Imagery.
+ * Nach Rückkehr zum Vektorstil werden Sprache und GeoJSON neu gesetzt.
+ * Marker (HTML-Elemente) überleben Style-Wechsel automatisch.
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ * @param {string} baseStyleName - Name des Basisstils (z.B. 'liberty')
+ */
+function vmAddSatelliteToggle(el, map, baseStyleName) {
+    let isSat = false;
+
+    const btn = document.createElement('button');
+    btn.type  = 'button';
+    btn.className = 'vm-satellite-widget';
+    btn.title = 'Satellitenbild umschalten';
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="2"/>
+        <path d="M6.3 6.3 3 3"/>
+        <path d="M17.7 6.3 21 3"/>
+        <path d="M6.3 17.7 3 21"/>
+        <path d="M17.7 17.7 21 21"/>
+        <path d="M9 9a4 4 0 0 1 6 0"/>
+        <path d="M6 6a8 8 0 0 1 12 0"/>
+    </svg>`;
+
+    btn.addEventListener('click', () => {
+        isSat = !isSat;
+        btn.classList.toggle('vm-satellite-widget--active', isSat);
+        btn.title = isSat ? 'Zur Vektorkarte wechseln' : 'Satellitenbild umschalten';
+
+        if (isSat) {
+            map.setStyle(VM_SATELLITE_STYLE);
+        } else {
+            const styleName = map._vmBaseStyle || baseStyleName || 'liberty';
+            const vectorStyle = vmProxyStyleUrl(styleName);
+            map.setStyle(vectorStyle);
+            map.once('idle', () => {
+                vmSetLanguage(map, el._vmLang || 'de');
+                vmLoadGeoJson(el, map);
+            });
+        }
+    });
+
+    el.appendChild(btn);
+}
+
+/**
+ * Unterstützt einfache Ausdrücke wie: amenity=charging_station, shop=supermarket,
+ * leisure=park, natural=tree sowie composite: amenity=fuel|amenity=charging_station
+ * @param {string} filter   Overpass-Filter-Ausdruck
+ * @param {number} radius   Suchradius in Metern
+ * @param {number} lat
+ * @param {number} lng
+ * @returns {string} Overpass QL Query
+ */
+function vmBuildOverpassQuery(filter, radius, lat, lng) {
+    const parts = filter.split('|').map(f => f.trim());
+    // nwr = node + way + relation damit auch Supermärkte/Ladestationen als Gebäudeflächen gefunden werden.
+    // out center liefert für ways/relations den Mittelpunkt als center.lat / center.lon.
+    const queries = parts.flatMap(p => {
+        const [k, v] = p.split('=');
+        const cond = v ? `["${k}"="${v}"]` : `["${k}"]`;
+        return [
+            `node${cond}(around:${radius},${lat},${lng});`,
+            `way${cond}(around:${radius},${lat},${lng});`,
+            `relation${cond}(around:${radius},${lat},${lng});`,
+        ];
+    });
+    return `[out:json][timeout:30];\n(\n  ${queries.join('\n  ')}\n);\nout center;`;
+}
+
+/**
+ * Fragt Overpass ab und rendert Marker mit Popup-Infos auf der Karte.
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ * @param {string} filter    Overpass-Filter z.B. "amenity=charging_station"
+ * @param {number} radius    Meter
+ * @param {string} labelAttr custom Popup-Label (optional)
+ * @param {number} lat
+ * @param {number} lng
+ */
+async function vmFetchNearby(el, map, filter, radius, labelAttr, lat, lng) {
+    // Ladeanzeige
+    const badge = document.createElement('div');
+    badge.className = 'vm-nearby-badge vm-nearby-loading';
+    badge.textContent = 'Suche …';
+    el.appendChild(badge);
+
+    const query = vmBuildOverpassQuery(filter, radius, lat, lng);
+    const url = 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query);
+
+    try {
+        const resp = await fetch(vmProxyUrl(url));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        badge.remove();
+
+        // nodes haben lat/lon direkt; ways/relations mit out center haben center.lat/center.lon
+        const elements = (data.elements || []).filter(e =>
+            (e.lat != null && e.lon != null) || (e.center?.lat != null)
+        );
+        if (!elements.length) {
+            const noResult = document.createElement('div');
+            noResult.className = 'vm-nearby-badge';
+            noResult.textContent = 'Keine Ergebnisse gefunden';
+            el.appendChild(noResult);
+            setTimeout(() => noResult.remove(), 4000);
+            return;
+        }
+
+        // Marker rendern
+        const bounds = new maplibregl.LngLatBounds();
+        elements.forEach(elem => {
+            // nodes: lat/lon direkt; ways/relations: center-Koordinaten aus out center
+            const eLat = elem.lat ?? elem.center?.lat;
+            const eLon = elem.lon ?? elem.center?.lon;
+            if (eLat == null || eLon == null) return;
+
+            const tags    = elem.tags || {};
+            const name    = tags.name || labelAttr || filter.split('=')[1] || filter;
+            const address = [tags['addr:street'], tags['addr:housenumber'], tags['addr:city']]
+                .filter(Boolean).join(' ');
+            const phone   = tags.phone || tags['contact:phone'] || '';
+            const website = tags.website || tags['contact:website'] || '';
+            const operator = tags.operator || '';
+
+            let popupHtml = `<strong>${name}</strong>`;
+            if (operator && operator !== name) popupHtml += `<br><small>${operator}</small>`;
+            if (address) popupHtml += `<br>${address}`;
+            if (phone)   popupHtml += `<br><a href="tel:${phone}">${phone}</a>`;
+            if (website) popupHtml += `<br><a href="${website}" target="_blank" rel="noopener">Website</a>`;
+
+            const m = new maplibregl.Marker({ color: '#2b7095', scale: 0.85 })
+                .setLngLat([eLon, eLat])
+                .setPopup(new maplibregl.Popup({ focusAfterOpen: false, offset: 22 }).setHTML(popupHtml))
+                .addTo(map);
+            vmBindPopupA11y(m, m.getPopup(), el);
+
+            // Marker tracken für späteren Reset
+            if (!el._vmNearbyMarkers) el._vmNearbyMarkers = [];
+            el._vmNearbyMarkers.push(m);
+            bounds.extend([eLon, eLat]);
+        });
+
+        // Ergebnis-Badge (Anzahl + Radius)
+        const resultBadge = document.createElement('div');
+        resultBadge.className = 'vm-nearby-badge';
+        resultBadge.innerHTML = `<span>📍 ${elements.length} gefunden</span><span>${(radius / 1000).toFixed(1)}&thinsp;km Radius</span>`;
+        el.appendChild(resultBadge);
+
+        // Bounds anpassen
+        if (!bounds.isEmpty()) {
+            map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 600 });
+        }
+
+        // Standort-Marker (Kreuz)
+        const locMarker = new maplibregl.Marker({ color: '#e74c3c' })
+            .setLngLat([lng, lat])
+            .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setText('Suchzentrum'))
+            .addTo(map);
+        vmBindPopupA11y(locMarker, locMarker.getPopup(), el);
+        if (!el._vmNearbyMarkers) el._vmNearbyMarkers = [];
+        el._vmNearbyMarkers.push(locMarker);
+
+        // Suchradius-Kreis als GeoJSON
+        const circleId = 'vm-nearby-radius-' + Math.random().toString(36).slice(2, 6);
+        const circleGeo = vmCreateCircleGeoJson(lat, lng, radius);
+        map.addSource(circleId, { type: 'geojson', data: circleGeo });
+        map.addLayer({ id: circleId + '-fill', type: 'fill', source: circleId,
+            paint: { 'fill-color': '#2b7095', 'fill-opacity': 0.07 } });
+        map.addLayer({ id: circleId + '-line', type: 'line', source: circleId,
+            paint: { 'line-color': '#2b7095', 'line-width': 1.5, 'line-dasharray': [3, 3] } });
+
+    } catch (err) {
+        badge.remove();
+        console.warn('<vectormap> Nearby-Suche fehlgeschlagen:', err);
+        const errBadge = document.createElement('div');
+        errBadge.className = 'vm-nearby-badge vm-nearby-error';
+        errBadge.textContent = 'Suche fehlgeschlagen';
+        el.appendChild(errBadge);
+        setTimeout(() => errBadge.remove(), 4000);
+    }
+}
+
+/**
+ * Erstellt ein annäherndes Kreis-GeoJSON (64-Eck) um einen Punkt.
+ * @param {number} lat @param {number} lng @param {number} radiusM
+ * @returns {GeoJSON}
+ */
+function vmCreateCircleGeoJson(lat, lng, radiusM) {
+    const n = 64;
+    const coords = [];
+    const R = 6371000; // Erdradius in Metern
+    for (let i = 0; i <= n; i++) {
+        const angle = (i / n) * 2 * Math.PI;
+        const dLat  = (radiusM / R) * (180 / Math.PI);
+        const dLng  = (radiusM / R) * (180 / Math.PI) / Math.cos(lat * Math.PI / 180);
+        coords.push([lng + dLng * Math.sin(angle), lat + dLat * Math.cos(angle)]);
+    }
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] } };
+}
+
+/**
+ * Startet vmFetchNearby nach Ermittlung des Nutzerstandorts (Geolocation API).
+ * Wenn Geolocation verweigert wird, fällt es auf den Karten-Mittelpunkt zurück.
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ * @param {string} filter
+ * @param {number} radius
+ * @param {string} labelAttr
+ */
+function vmStartNearbyWithLocate(el, map, filter, radius, labelAttr) {
+    const badge = document.createElement('div');
+    badge.className = 'vm-nearby-badge vm-nearby-loading';
+    badge.textContent = 'Standort wird ermittelt …';
+    el.appendChild(badge);
+
+    if (!navigator.geolocation) {
+        badge.remove();
+        const c = map.getCenter();
+        vmFetchNearby(el, map, filter, radius, labelAttr, c.lat, c.lng);
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            badge.remove();
+            const { latitude: lat, longitude: lng } = pos.coords;
+            // Karte auf Nutzerstandort zentrieren
+            map.setCenter([lng, lat]);
+            map.setZoom(13);
+            vmFetchNearby(el, map, filter, radius, labelAttr, lat, lng);
+        },
+        () => {
+            badge.remove();
+            // Fallback: Karten-Mittelpunkt nutzen
+            const c = map.getCenter();
+            vmFetchNearby(el, map, filter, radius, labelAttr, c.lat, c.lng);
+        },
+        { timeout: 8000, maximumAge: 60000 }
+    );
+}
+
+/* ---------- GeoJSON-Support ---------- */
+
+/**
+ * Lädt und rendert externes oder inline GeoJSON auf der Karte.
+ * Relative URLs werden direkt gefetcht, absolute URLs laufen über den REDAXO-Proxy.
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ */
+async function vmLoadGeoJson(el, map) {
+    const geojsonAttr = el.getAttribute('geojson');
+    if (!geojsonAttr) return;
+    // schon geladen (z. B. zurück vom Satellitenbild): nicht neu abrufen
+    if (el._vmGeoJsonData) {
+        vmRenderGeoJson(el, map, el._vmGeoJsonData);
+        return;
+    }
+
+    let data;
+    const trimmed = geojsonAttr.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        // Inline-JSON
+        try { data = JSON.parse(trimmed); } catch (err) {
+            console.warn('<vectormap> geojson: JSON ungültig:', err); return;
+        }
+    } else {
+        // URL: relativ → direkt, absolut → via Proxy
+        const url = trimmed.startsWith('http') ? vmProxyUrl(trimmed) : trimmed;
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            data = await res.json();
+        } catch (err) {
+            console.warn('<vectormap> geojson: URL konnte nicht geladen werden:', err); return;
+        }
+    }
+
+    el._vmGeoJsonData = data;
+    vmRenderGeoJson(el, map, data);
+}
+
+/**
+ * Rendert GeoJSON-Daten als Map-Layer (Flächen, Linien, Punkte).
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ * @param {object} data - GeoJSON Feature oder FeatureCollection
+ */
+function vmRenderGeoJson(el, map, data) {
+    const color     = el.getAttribute('geojson-color')   || '#2b7095';
+    const opacity   = parseFloat(el.getAttribute('geojson-opacity') || '0.3');
+    const popupProp = el.getAttribute('geojson-popup') || '';
+
+    // Auf FeatureCollection normalisieren
+    if (data.type === 'Feature')  data = { type: 'FeatureCollection', features: [data] };
+    if (!data.features)           data = { type: 'FeatureCollection', features: [] };
+
+    // feste ID je Element: nach einem Stilwechsel (Satellit ↔ Vektor) werden nur Quelle und Ebenen neu angelegt –
+    // Marker (überleben setStyle), Klick-Handler und das Einpassen nicht noch einmal
+    const firstRender = !el._vmGeoJsonId;
+    const id = el._vmGeoJsonId || (el._vmGeoJsonId = 'vm-geojson-' + Math.random().toString(36).slice(2, 7));
+    if (map.getSource(id)) return;
+    map.addSource(id, { type: 'geojson', data });
+
+    // Filter als Ausdrücke (['geometry-type'], Multi-Varianten eingeschlossen) – die alte $type-Syntax gemischt mit
+    // Ausdrücken ist ungültig (MapLibre verwirft den Filter, ab v6 ein Fehler)
+    // fill- und circle-Layer brauchen keinen Filter (MapLibre ignoriert inkompatible Geometrien)
+
+    // Flächen (Polygon / MultiPolygon) — Feature-Properties (fill, fill_opacity)
+    // überschreiben die globalen Attribut-Werte (z. B. aus dem Regionen-Builder)
+    map.addLayer({
+        id: id + '-fill', type: 'fill', source: id,
+        paint: {
+            'fill-color': ['coalesce', ['get', 'fill'], color],
+            'fill-opacity': ['coalesce', ['get', 'fill_opacity'], opacity],
+        },
+    });
+    map.addLayer({
+        id: id + '-fill-outline', type: 'line', source: id,
+        filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+        paint: { 'line-color': ['coalesce', ['get', 'fill'], color], 'line-width': 2 },
+    });
+
+    // Linien (LineString / MultiLineString)
+    map.addLayer({
+        id: id + '-line', type: 'line', source: id,
+        filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+        paint: { 'line-color': color, 'line-width': 3, 'line-opacity': Math.min(opacity * 3, 1) },
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+    });
+
+    // Punkte (Point / MultiPoint) → echte maplibregl.Marker-Pins (Simplestyle-kompatibel)
+    // Unterstützte GeoJSON-Properties: marker-color, marker-symbol
+    const isLabelFeature = (feature) => {
+        const props = feature && feature.properties ? feature.properties : {};
+        return props.vm_label === true || props.vm_label === 1 || props.vm_label === '1';
+    };
+
+    const pointFeatures = data.features.filter(
+        f => f.geometry && (f.geometry.type === 'Point' || f.geometry.type === 'MultiPoint') && !isLabelFeature(f)
+    );
+    if (firstRender) pointFeatures.forEach(f => {
+        const props     = f.properties || {};
+        const mColor    = props['marker-color'] || color;
+        const mSymbol   = props['marker-symbol'] || '';
+        const coords    = f.geometry.type === 'Point'
+            ? [f.geometry.coordinates]
+            : f.geometry.coordinates;
+
+        // Popup-Inhalt aufbauen
+        const buildPopup = () => {
+            let content = '';
+            if (popupProp && props[popupProp] !== undefined) {
+                content = String(props[popupProp]);
+            } else {
+                const rows = Object.entries(props)
+                    .filter(([k, v]) => v !== null && v !== '' && !k.startsWith('marker-'))
+                    .map(([k, v]) => `<tr><th style="padding-right:8px;font-weight:600;white-space:nowrap">${k}</th><td>${String(v)}</td></tr>`);
+                if (rows.length) content = `<table style="font-size:13px;border-collapse:collapse">${rows.join('')}</table>`;
+            }
+            return content;
+        };
+
+        coords.forEach(coord => {
+            let markerEl = null;
+            if (mSymbol) {
+                markerEl = document.createElement('div');
+                markerEl.className = 'vm-custom-marker vm-geojson-pin';
+                markerEl.style.cssText = [
+                    `background:${mColor}`,
+                    'border:2px solid #fff',
+                    'border-radius:50%',
+                    'width:30px',
+                    'height:30px',
+                    'display:flex',
+                    'align-items:center',
+                    'justify-content:center',
+                    'font-size:15px',
+                    'cursor:pointer',
+                    'box-shadow:0 2px 6px rgba(0,0,0,.4)',
+                ].join(';');
+                markerEl.textContent = mSymbol;
+            }
+            const markerOpts = markerEl ? { element: markerEl } : { color: mColor };
+            const m = new maplibregl.Marker(markerOpts).setLngLat([coord[0], coord[1]]);
+            const popupHtml = buildPopup();
+            if (popupHtml) {
+                const popup = new maplibregl.Popup({ focusAfterOpen: false, offset: 25 }).setHTML(popupHtml);
+                m.setPopup(popup);
+                vmBindPopupA11y(m, popup, el);
+            }
+            m.addTo(map);
+        });
+    });
+
+    map.addLayer({
+        id: id + '-labels-bg',
+        type: 'circle',
+        source: id,
+        filter: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['any', ['==', ['get', 'vm_label'], true], ['==', ['get', 'vm_label'], 1], ['==', ['get', 'vm_label'], '1']], ['==', ['get', 'label_kind'], 'region']],
+        paint: {
+            'circle-radius': 16,
+            'circle-color': ['coalesce', ['get', 'label_bg'], '#111827'],
+            'circle-opacity': 0.92,
+        },
+    });
+
+    map.addLayer({
+        id: id + '-labels',
+        type: 'symbol',
+        source: id,
+        filter: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['any', ['==', ['get', 'vm_label'], true], ['==', ['get', 'vm_label'], 1], ['==', ['get', 'vm_label'], '1']]],
+        layout: {
+            'text-field': ['coalesce', ['get', 'label'], ['get', 'name'], ''],
+            'text-size': ['case', ['==', ['get', 'label_kind'], 'region'], 13, 11],
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+        },
+        paint: {
+            'text-color': ['coalesce', ['get', 'label_color'], '#111827'],
+            'text-halo-color': '#ffffff',
+            'text-halo-width': ['case', ['==', ['get', 'label_kind'], 'region'], 0.2, 1.2],
+            'text-halo-blur': 0.4,
+        },
+    });
+
+    // Auto-Bounds: Karte auf alle GeoJSON-Features ausrichten (wenn kein fit-bounds="false")
+    if (firstRender && el.getAttribute('fit-bounds') !== 'false') {
+        try {
+            const coords = [];
+            data.features.forEach(f => {
+                const g = f.geometry;
+                if (!g) return;
+                const flat = (arr) => {
+                    if (typeof arr[0] === 'number') { coords.push(arr); return; }
+                    arr.forEach(flat);
+                };
+                if (g.type === 'Point') coords.push(g.coordinates);
+                else if (g.coordinates) flat(g.coordinates);
+            });
+            if (coords.length > 0) {
+                const first = [coords[0][0], coords[0][1]];
+                const bounds = coords.reduce(
+                    (b, c) => b.extend([c[0], c[1]]),
+                    new maplibregl.LngLatBounds(first, first)
+                );
+                // Nur wenn kein markers-Attribut sitzt (sonst vmFitMarkerBounds kümmert sich)
+                if (!el.getAttribute('markers')) {
+                    map.fitBounds(bounds, { padding: 50, maxZoom: 16, duration: 500 });
+                }
+            }
+        } catch (_) { /* Bounds-Fehler ignorieren */ }
+    }
+
+    // Klick-Popups für Linien + Flächen (Punkte nutzen Marker-Popup)
+    const clickLayers = [id + '-line', id + '-fill'];
+    if (firstRender) clickLayers.forEach(layer => {
+        map.on('click', layer, (e) => {
+            const props = e.features[0].properties || {};
+            let content = '';
+            if (popupProp && props[popupProp] !== undefined) {
+                content = String(props[popupProp]);
+            } else {
+                // Auto-Popup: alle Properties als Tabelle
+                const rows = Object.entries(props)
+                    .filter(([, v]) => v !== null && v !== '')
+                    .map(([k, v]) => `<tr><th style="padding-right:8px;font-weight:600;white-space:nowrap">${k}</th><td>${String(v)}</td></tr>`);
+                if (rows.length) content = `<table style="font-size:13px;border-collapse:collapse">${rows.join('')}</table>`;
+            }
+            if (!content) return;
+            const featurePopup = new maplibregl.Popup({ focusAfterOpen: false })
+                .setLngLat(e.lngLat)
+                .setHTML(content)
+                .addTo(map);
+            vmBindFeaturePopupA11y(map, featurePopup, el);
+        });
+        map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+    });
+}
+
+/* ---------- Demo 12: 3D Overfly Berlin ---------- */
+
+/**
+ * Cinematic 3D-Überflug durch Berliner Wahrzeichen.
+ * Wartet via Polling auf el._vmMap (lazy init via IntersectionObserver),
+ * dann startet die animierte Sequenz nach 800 ms.
+ */
+function initOverflyDemo() {
+    const el = document.getElementById('vm-overfly-map');
+    if (!el || el._vmOverflyInit) return;
+    el._vmOverflyInit = true;
+    let tries = 0;
+    const pollTimer = setInterval(() => {
+        // aufgeben, wenn das Element weg ist oder nach 10 Minuten (Karte nie in Sicht gescrollt)
+        if (!el.isConnected || ++tries > 2400) { clearInterval(pollTimer); return; }
+        if (!el._vmMap) return;
+        clearInterval(pollTimer);
+        const map = el._vmMap;
+        // Play-Button: Überflug bei Klick (auch Neustart) anstoßen
+        const btn = document.getElementById('vm-overfly-play');
+        if (btn) {
+            btn.addEventListener('click', () => {
+                map._vmOverflyRunning = false; // Reset erlaubt Neustart
+                vmStartBerlinOverfly(map);
+            });
+        }
+        if (map.isStyleLoaded()) {
+            vmStartBerlinOverfly(map);
+        } else {
+            map.once('load', () => vmStartBerlinOverfly(map));
+        }
+    }, 250);
+}
+
+/**
+ * Demo-Helper: steuert das globale Infofenster über die neue Element-API.
+ * Wird nur aktiv, wenn die Demo-Buttons vorhanden sind.
+ */
+function initCustomUiInfoDemo() {
+    const el = document.getElementById('vm-info-demo');
+    if (!el || el._vmInfoDemoInit) return;
+
+    const btnUpdate = document.getElementById('vm-info-update-btn');
+    const btnBottom = document.getElementById('vm-info-bottom-btn');
+    const btnHide = document.getElementById('vm-info-hide-btn');
+    if (!btnUpdate && !btnBottom && !btnHide) return;
+
+    el._vmInfoDemoInit = true;
+
+    if (btnUpdate) {
+        btnUpdate.addEventListener('click', () => {
+            const now = new Date().toLocaleTimeString();
+            el.setInfoHtml('<h4 style="margin:0 0 6px">Live-Update</h4><p style="margin:0">Stand: ' + now + '<br><small>Per JS ersetzt</small></p>');
+            el.showInfoWindow();
+        });
+    }
+
+    if (btnBottom) {
+        btnBottom.addEventListener('click', () => {
+            el.setInfoPosition('bottom-right');
+            el.showInfoWindow();
+        });
+    }
+
+    if (btnHide) {
+        btnHide.addEventListener('click', () => {
+            el.hideInfoWindow();
+        });
+    }
+}
+
+/**
+ * Berliner Overfly-Waypoints.
+ * Jeder Waypoint: { center, zoom, pitch, bearing, duration, label }
+ */
+const VM_BERLIN_WAYPOINTS = [
+    // Start: Deutschland-Übersicht → Berlin heranfliegen
+    { center: [13.405,  52.52],  zoom: 5,    pitch: 20,  bearing: 0,   duration: 2500, label: '' },
+    // Brandenburger Tor
+    { center: [13.3777, 52.5163], zoom: 16.5, pitch: 65,  bearing: -30, duration: 5000, label: 'Brandenburger Tor' },
+    // Reichstag + Bundestag
+    { center: [13.3761, 52.5186], zoom: 17,   pitch: 70,  bearing: 40,  duration: 4000, label: 'Reichstag' },
+    // Humboldt Forum / Berliner Schloss
+    { center: [13.4003, 52.5166], zoom: 16.5, pitch: 65,  bearing: -60, duration: 5500, label: 'Humboldt Forum' },
+    // Berliner Dom
+    { center: [13.4014, 52.5191], zoom: 17,   pitch: 70,  bearing: 20,  duration: 3500, label: 'Berliner Dom' },
+    // Alexanderplatz / Fernsehturm
+    { center: [13.4094, 52.5219], zoom: 17,   pitch: 70,  bearing: 80,  duration: 4500, label: 'Fernsehturm' },
+    // Potsdamer Platz
+    { center: [13.3762, 52.5096], zoom: 16.5, pitch: 65,  bearing: -20, duration: 5000, label: 'Potsdamer Platz' },
+    // East Side Gallery / Oberbaumbrücke
+    { center: [13.4397, 52.5050], zoom: 16,   pitch: 60,  bearing: 110, duration: 5500, label: 'East Side Gallery' },
+    // Auszoomen: Überblick Berlin
+    { center: [13.405,  52.52],  zoom: 12.5, pitch: 30,  bearing: 0,   duration: 4000, label: '' },
+];
+
+/**
+ * @param {maplibregl.Map} map
+ */
+function vmStartBerlinOverfly(map) {
+    const statusEl = document.getElementById('vm-overfly-status');
+    const btnEl    = document.getElementById('vm-overfly-play');
+    if (map._vmOverflyRunning) return;
+
+    // 3D-Gebäude sicherstellen
+    const ensure3d = () => {
+        if (map.getLayer('vm-overfly-3d')) return;
+        const sources = map.getStyle().sources;
+        const srcName = Object.keys(sources).find(k => sources[k].type === 'vector') || 'openmaptiles';
+        map.addLayer({
+            id:             'vm-overfly-3d',
+            source:         srcName,
+            'source-layer': 'building',
+            filter:         ['!=', ['get', 'hide_3d'], true],
+            type:           'fill-extrusion',
+            minzoom:        14,
+            paint: {
+                'fill-extrusion-color':   '#a8b4c0',
+                'fill-extrusion-height':  ['interpolate', ['linear'], ['zoom'], 14, 0, 14.5, ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]],
+                'fill-extrusion-base':    ['interpolate', ['linear'], ['zoom'], 14, 0, 14.5, ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0]],
+                'fill-extrusion-opacity': 0.8,
+            },
+        });
+    };
+
+    if (map.isStyleLoaded()) ensure3d();
+    // nur einmal je Karte anmelden – „Nochmal abspielen“ startet diese Funktion erneut
+    if (!map._vmOverfly3dBound) {
+        map._vmOverfly3dBound = true;
+        map.on('styledata', () => { if (map.isStyleLoaded()) ensure3d(); });
+    }
+
+    let step = 0;
+    map._vmOverflyRunning = true;
+    if (btnEl) { btnEl.disabled = true; btnEl.textContent = '▶ Läuft …'; }
+
+    const fly = () => {
+        if (step >= VM_BERLIN_WAYPOINTS.length) {
+            map._vmOverflyRunning = false;
+            if (btnEl) { btnEl.disabled = false; btnEl.textContent = '▶ Nochmal abspielen'; }
+            if (statusEl) statusEl.textContent = '';
+            return;
+        }
+        const wp = VM_BERLIN_WAYPOINTS[step];
+        if (statusEl && wp.label) statusEl.textContent = '📍 ' + wp.label;
+        else if (statusEl)        statusEl.textContent = '';
+        map.flyTo({
+            center:   wp.center,
+            zoom:     wp.zoom,
+            pitch:    wp.pitch,
+            bearing:  wp.bearing,
+            duration: wp.duration,
+            essential: true,
+        });
+        step++;
+        setTimeout(fly, wp.duration + 600);
+    };
+
+    setTimeout(fly, 800);
+}
+
+/* ---------- Demo 11: Ladestationen (Overpass API) ---------- */
+
+/**
+ * Initialisiert die dynamische Ladestation-Demo auf der Demo-Seite.
+ * Wartet auf die lazy-gebaute MapLibre-Instanz des Elements #vm-cs-map,
+ * richtet dann GeoJSON-Source + Layer ein und lädt Ladesäulen bei moveend.
+ */
+function initChargingStationDemo() {
+    const el = document.getElementById('vm-cs-map');
+    if (!el || el._vmCsInit) return;
+    el._vmCsInit = true;
+
+    // Warte auf die MapLibre-Instanz (lazy init via IntersectionObserver)
+    let tries = 0;
+    const pollTimer = setInterval(() => {
+        if (!el.isConnected || ++tries > 2400) { clearInterval(pollTimer); return; }
+        if (!el._vmMap) return;
+        clearInterval(pollTimer);
+        const map = el._vmMap;
+        if (map.isStyleLoaded()) {
+            vmSetupCsDemo(el, map);
+        } else {
+            map.once('load', () => vmSetupCsDemo(el, map));
+        }
+    }, 250);
+}
+
+/**
+ * @param {HTMLElement} el
+ * @param {maplibregl.Map} map
+ */
+function vmSetupCsDemo(el, map) {
+    map.addSource('vm-cs', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+    });
+
+    // Halo-Ring (weich, nur bei näherer Zoom-Stufe sichtbar)
+    map.addLayer({
+        id: 'vm-cs-halo',
+        type: 'circle',
+        source: 'vm-cs',
+        paint: {
+            'circle-radius':  ['interpolate', ['linear'], ['zoom'], 9, 12, 14, 24],
+            'circle-color':   '#27ae60',
+            'circle-opacity': 0.12,
+        },
+    });
+
+    // Haupt-Punkte
+    map.addLayer({
+        id: 'vm-cs-dots',
+        type: 'circle',
+        source: 'vm-cs',
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 5, 14, 11],
+            'circle-color': [
+                'case',
+                ['>', ['to-number', ['coalesce', ['get', 'capacity'], '0'], 0], 3],
+                '#16a085',   // viele Stecker → dunkelgrün
+                '#27ae60',   // Standard → grün
+            ],
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 2,
+        },
+    });
+
+    const popup = new maplibregl.Popup({ focusAfterOpen: false, closeButton: false, maxWidth: '260px' });
+    map.on('click', 'vm-cs-dots', (e) => {
+        const p = e.features[0].properties;
+        const parts = [];
+        if (p.name)     parts.push('<strong>' + p.name + '</strong>');
+        if (p.operator) parts.push('<span style="color:#555">' + p.operator + '</span>');
+        if (p.capacity) parts.push('⚡ ' + p.capacity + ' Stecker');
+        if (p.network)  parts.push('Netz: ' + p.network);
+        popup.setLngLat(e.features[0].geometry.coordinates)
+             .setHTML(parts.join('<br>') || '<em>E-Ladestation</em>')
+             .addTo(map);
+    });
+    map.on('mouseenter', 'vm-cs-dots', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'vm-cs-dots', () => { map.getCanvas().style.cursor = ''; });
+
+    const badge   = document.getElementById('vm-cs-count');
+    const spinner = document.getElementById('vm-cs-loading');
+    let debTimer;
+
+    function loadStations() {
+        clearTimeout(debTimer);
+        debTimer = setTimeout(async () => {
+            // Erst ab Zoom 9 laden (sonst Millionen Ergebnisse)
+            if (map.getZoom() < 9) {
+                if (badge) badge.textContent = 'Bitte näher heranzoomen (ab Zoom 9)';
+                map.getSource('vm-cs').setData({ type: 'FeatureCollection', features: [] });
+                return;
+            }
+            if (spinner) spinner.style.display = '';
+            const b = map.getBounds();
+            // auf 2 Nachkommastellen runden: gleiche Ausschnitte treffen den Server-Cache
+            const r2 = (v, up) => (up ? Math.ceil(v * 100) : Math.floor(v * 100)) / 100;
+            const q = `[out:json][timeout:10];node["amenity"="charging_station"](${r2(b.getSouth())},${r2(b.getWest())},${r2(b.getNorth(), true)},${r2(b.getEast(), true)});out 200;`;
+            const url = vmProxyUrl('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q));
+            // vorige Abfrage abbrechen – sonst überschreibt eine späte alte Antwort die neue
+            if (el._vmCsAbort) el._vmCsAbort.abort();
+            const ctrl = el._vmCsAbort = new AbortController();
+            try {
+                const data = await fetch(url, { signal: ctrl.signal }).then(r => r.json());
+                const features = (data.elements || []).map(n => ({
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [n.lon, n.lat] },
+                    properties: {
+                        name:     (n.tags && n.tags.name)     || null,
+                        operator: (n.tags && n.tags.operator) || null,
+                        capacity: (n.tags && n.tags.capacity) || null,
+                        network:  (n.tags && n.tags.network)  || null,
+                    },
+                }));
+                map.getSource('vm-cs').setData({ type: 'FeatureCollection', features });
+                if (badge) {
+                    if (features.length === 0) {
+                        badge.textContent = 'Keine Ladesäulen in diesem Bereich';
+                    } else {
+                        const more = features.length >= 200 ? '+ ' : ' ';
+                        badge.textContent = features.length + more + 'Ladesäule' + (features.length !== 1 ? 'n' : '') + ' gefunden';
+                    }
+                }
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;   // von einer neueren Abfrage ersetzt
+                if (badge) badge.textContent = 'API nicht erreichbar';
+            } finally {
+                if (spinner) spinner.style.display = 'none';
+            }
+        }, 600);
+    }
+
+    map.on('moveend', loadStations);
+    loadStations(); // Sofort laden beim Start
+}
+
+/* ---------- MapLibre GL Controls ---------- */
+
+/* ---------- In Karten-App öffnen ---------- */
+
+const VM_MAP_APPS = {
+    google: {
+        label: 'Google Maps',
+        url: (t) => 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(t.text),
+    },
+    apple: {
+        label: 'Apple Karten',
+        url: (t) => 'https://maps.apple.com/?daddr=' + encodeURIComponent(t.text),
+    },
+    osm: {
+        label: 'OpenStreetMap',
+        url: (t) => t.coords
+            ? 'https://www.openstreetmap.org/?mlat=' + t.coords[0] + '&mlon=' + t.coords[1] + '#map=17/' + t.coords[0] + '/' + t.coords[1]
+            : 'https://www.openstreetmap.org/search?query=' + encodeURIComponent(t.text),
+    },
+    waze: {
+        label: 'Waze',
+        url: (t) => t.coords
+            ? 'https://waze.com/ul?ll=' + t.coords[0] + ',' + t.coords[1] + '&navigate=yes'
+            : 'https://waze.com/ul?q=' + encodeURIComponent(t.text) + '&navigate=yes',
+    },
+};
+
+/** Ziel für „In Karten-App öffnen“: map-apps-target, route-to, erster Marker oder Kartenmitte */
+function vmMapAppsTarget(el) {
+    const explicit = (el.getAttribute('map-apps-target') || el.getAttribute('route-to') || '').trim();
+    if (explicit) return explicit;
+    try {
+        const markers = JSON.parse(el.getAttribute('markers') || '[]');
+        if (Array.isArray(markers) && markers[0] && markers[0].lat !== undefined) return markers[0].lat + ',' + markers[0].lng;
+    } catch (_) { /* kein gültiges JSON */ }
+    if (el._vmMap) {
+        const c = el._vmMap.getCenter();
+        return c.lat.toFixed(6) + ',' + c.lng.toFixed(6);
+    }
+    return (el.getAttribute('center') || '').trim();
+}
+
+function vmParseMapAppsTarget(text) {
+    const m = /^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/.exec(text);
+    return { text: text.trim(), coords: m ? [m[1], m[2]] : null };
+}
+
+/**
+ * Knopf mit Auswahlliste „In Karten-App öffnen“. getTarget() liefert beim Öffnen das aktuelle Ziel
+ * (Adresse oder lat,lng). Links öffnen in neuem Tab bzw. in der App (Universal Links).
+ */
+function vmMapAppsMenu(el, getTarget) {
+    const wanted = String(el.getAttribute('map-apps') || '').toLowerCase().split(/[\s,]+/).filter((k) => VM_MAP_APPS[k]);
+    const keys = wanted.length ? wanted : Object.keys(VM_MAP_APPS);
+    const label = el.getAttribute('map-apps-label') || 'In Karten-App öffnen';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'vm-apps';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'vm-apps-btn';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span></span>';
+    btn.querySelector('span').textContent = label;
+    const menu = document.createElement('ul');
+    menu.className = 'vm-apps-menu';
+    menu.hidden = true;
+    wrap.append(btn, menu);
+
+    const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    const open = () => {
+        const target = vmParseMapAppsTarget(getTarget() || '');
+        menu.innerHTML = '';
+        if (!target.text) {
+            const li = document.createElement('li');
+            li.className = 'vm-apps-empty';
+            li.textContent = 'Bitte zuerst ein Ziel eingeben.';
+            menu.appendChild(li);
+        }
+        else keys.forEach((k) => {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = VM_MAP_APPS[k].url(target);
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = VM_MAP_APPS[k].label;
+            a.addEventListener('click', close);
+            li.appendChild(a);
+            menu.appendChild(li);
+        });
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        menu.querySelector('a')?.focus();
+    };
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (menu.hidden) open(); else close();
+    });
+    // schließen: Klick daneben, Esc, Fokus verlässt das Menü
+    document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); }, { signal: vmSignal(el) });
+    wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); btn.focus(); } });
+    wrap.addEventListener('focusout', (e) => { if (!wrap.contains(e.relatedTarget)) close(); });
+
+    return wrap;
+}
+
+/** „In Karten-App öffnen“ als MapLibre-Control (ohne Route-Panel) */
+class VMMapAppsControl {
+    constructor(el) { this.el = el; }
+    onAdd() {
+        const c = document.createElement('div');
+        c.className = 'maplibregl-ctrl maplibregl-ctrl-group vm-apps-ctrl';
+        c.appendChild(vmMapAppsMenu(this.el, () => vmMapAppsTarget(this.el)));
+        this.container = c;
+        return c;
+    }
+    onRemove() { this.container?.remove(); }
+}
+
+/**
+ * Fullscreen-Control für MapLibre GL
+ *
+ * Schaltet das ganze <vector-map>-Element in den Vollbildmodus – nicht nur die Karte –, damit Routenplaner,
+ * Hinweise und eigene Knöpfe (alle am Element) auch im Vollbild da sind. Wo Element-Vollbild fehlt (iPhone) oder
+ * scheitert, füllt das Element per CSS den Bildschirm (Klasse vm-fs-pseudo, Esc beendet).
+ */
+class VMFullscreenControl {
+    onAdd(map) {
+        this.map = map;
+        const container = document.createElement('div');
+        container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+        const btn = document.createElement('button');
+        btn.className = 'maplibregl-ctrl-icon vm-fs-btn';
+        btn.type = 'button';
+        btn.title = 'Vollbild';
+        btn.setAttribute('aria-label', 'Vollbild');
+        btn.setAttribute('aria-pressed', 'false');
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+
+        btn.addEventListener('click', () => this.toggleFullscreen());
+        container.appendChild(btn);
+
+        this.fullscreenBtn = btn;
+        this._onChange = () => this.updateButton();
+        this._onKey = (e) => { if (e.key === 'Escape' && this.target().classList.contains('vm-fs-pseudo')) this.setPseudo(false); };
+        document.addEventListener('fullscreenchange', this._onChange);
+        document.addEventListener('webkitfullscreenchange', this._onChange);
+        document.addEventListener('keydown', this._onKey);
+
+        return container;
+    }
+
+    /** Vollbild-Ziel: das <vector-map>-Element samt Panels, sonst der Kartencontainer */
+    target() {
+        const c = this.map.getContainer();
+        return c.closest('vector-map, vectormap') || c;
+    }
+
+    isActive() {
+        const t = this.target();
+        return (document.fullscreenElement || document.webkitFullscreenElement) === t || t.classList.contains('vm-fs-pseudo');
+    }
+
+    setPseudo(on) {
+        const t = this.target();
+        t.classList.toggle('vm-fs-pseudo', on);
+        document.documentElement.classList.toggle('vm-fs-lock', on);
+        this.updateButton();
+    }
+
+    toggleFullscreen() {
+        const t = this.target();
+        if (this.isActive()) {
+            if (t.classList.contains('vm-fs-pseudo')) this.setPseudo(false);
+            else (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+            return;
+        }
+        const req = t.requestFullscreen || t.webkitRequestFullscreen;
+        if (!req) { this.setPseudo(true); return; }
+        try {
+            const p = req.call(t);
+            if (p && typeof p.catch === 'function') p.catch(() => this.setPseudo(true));
+        } catch (_) {
+            this.setPseudo(true);
+        }
+    }
+
+    updateButton() {
+        const on = this.isActive();
+        this.fullscreenBtn?.classList.toggle('vm-fs-active', on);
+        this.fullscreenBtn?.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (this.fullscreenBtn) this.fullscreenBtn.title = on ? 'Vollbild beenden' : 'Vollbild';
+        // Karte an die neue Größe anpassen
+        requestAnimationFrame(() => { try { this.map.resize(); } catch (_) { /* Karte entfernt */ } });
+    }
+
+    onRemove() {
+        document.removeEventListener('fullscreenchange', this._onChange);
+        document.removeEventListener('webkitfullscreenchange', this._onChange);
+        document.removeEventListener('keydown', this._onKey);
+        if (this.target().classList.contains('vm-fs-pseudo')) this.setPseudo(false);
+    }
+}
+
+/* ---------- Aufräumen ---------- */
+
+/** AbortSignal je Karten-Element: globale Listener (document) damit anmelden, beim Entfernen alles auf einmal lösen */
+function vmSignal(el) {
+    if (!el._vmAbort) el._vmAbort = new AbortController();
+    return el._vmAbort.signal;
+}
+
+/** Alle Karten lösen, deren Element nicht mehr im Dokument hängt */
+function vmSweepDetachedMaps() {
+    VM_ACTIVE_MAPS.slice().forEach((map) => {
+        const c = map.getContainer();
+        if (c.isConnected) return;
+        const host = c.closest('vector-map, vectormap');
+        if (host) vmDestroyMap(host);
+        else { try { map.remove(); } catch (_) { /* */ } }
+    });
+}
+
+/** Karte und alles Drumherum lösen (Element aus dem DOM, PJAX-Wechsel) */
+function vmDestroyMap(el) {
+    if (el._vmMap) { try { el._vmMap.remove(); } catch (_) { /* schon weg */ } }
+    if (el._vmResizeObs) { el._vmResizeObs.disconnect(); el._vmResizeObs = null; }
+    if (el._vmObserver) { el._vmObserver.disconnect(); el._vmObserver = null; }
+    if (el._vmAbort) { el._vmAbort.abort(); el._vmAbort = null; }
+    if (el._vmCsAbort) { el._vmCsAbort.abort(); el._vmCsAbort = null; }
+    if (el.classList.contains('vm-fs-pseudo')) {
+        el.classList.remove('vm-fs-pseudo');
+        document.documentElement.classList.remove('vm-fs-lock');
+    }
+}
+
+/* ---------- Custom Element ---------- */
+class VectorMapElement extends HTMLElement {
+    connectedCallback()    { initVectorMap(this); }
+    disconnectedCallback() { vmDestroyMap(this); }
+}
+
+if (!customElements.get('vector-map')) {
+    customElements.define('vector-map', VectorMapElement);
+}
+
+// Auch wenn das Script erst nach dem Seitenaufbau geladen wird (Lazy-Loading, PJAX), initialisieren
+if (document.readyState === 'loading') {
+    document.addEventListener("DOMContentLoaded", () => {
+        new VectorMapPicker();
+    });
+} else {
+    new VectorMapPicker();
+}
+
+
+/* ---------- Globale API (Kompatibilität mit Skripten ohne Modul) ---------- */
+
+const VM_PUBLIC = {
+    maplibregl,
+    initVectorMap,
+    vmApplyTheme,
+    vmLoadAndApplyTheme,
+    vmSetLanguage,
+    vmProxyUrl,
+    vmProxyStyleUrl,
+    vmTransformRequest,
+    vmWrapGetWithCoalesce,
+    vmWrapAnyGetWithCoalesce,
+    vmFixExtrusionLayers,
+    vmDestroyMap,
+    VM_BUILT_IN_THEMES,
+    VM_OFM_STYLES,
+    VM_EXTRA_STYLES,
+};
+Object.entries(VM_PUBLIC).forEach(([name, value]) => { if (!(name in window)) window[name] = value; });
+// window.VectorMaps.ready: vom Lader angelegt (dann hier auflösen), sonst direkt erfüllt
+const vmApi = window.VectorMaps = Object.assign(window.VectorMaps || {}, VM_PUBLIC);
+if (typeof vmApi.__resolveReady === 'function') { vmApi.__resolveReady(VM_PUBLIC); delete vmApi.__resolveReady; }
+else vmApi.ready = Promise.resolve(VM_PUBLIC);
+document.dispatchEvent(new CustomEvent('vectormaps:ready', { detail: VM_PUBLIC }));

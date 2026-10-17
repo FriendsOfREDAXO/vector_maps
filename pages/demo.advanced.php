@@ -1088,12 +1088,13 @@ map.on('moveend', async () => {
                 <p>OpenFreeMap stellt kostenlose Vektorkacheln auf Basis von OpenStreetMap-Daten bereit. Der REDAXO-Proxy leitet alle Anfragen durch den Server – keine direkte Verbindung vom Browser.</p>
                 <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;!-- MapLibre CSS + JS einbinden --&gt;
 &lt;link rel="stylesheet" href="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('maplibre/maplibre-gl.css') ?&gt;"&gt;
-&lt;!-- MapLibre 6 ist ein ES-Modul und kommt mit vector_maps (danach global: window.maplibregl) --&gt;
-&lt;script type="module" src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
+&lt;!-- vector_maps lädt MapLibre 6 mit (danach global: window.maplibregl) --&gt;
+&lt;script defer src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 
 &lt;div id="map" style="width:100%;height:400px"&gt;&lt;/div&gt;
 
-&lt;script type="module"&gt;  // Module laufen nach vectormaps.min.js – maplibregl ist dann da
+&lt;script type="module"&gt;
+await VectorMaps.ready;   // MapLibre 6 ist geladen
 // Proxy-URL-Helper (alle Tiles laufen durch REDAXO)
 function proxyUrl(url) {
     return window.location.origin
@@ -1129,8 +1130,9 @@ const map = new maplibregl.Map({
                 <p>VersaTiles liefert freie Vektorkacheln aus OpenStreetMap-Daten (Shortbread-Schema), betrieben in Deutschland. Im Tag einfach per <code>map-style</code>:</p>
                 <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;vectormap center="51.43,6.76" zoom="12" map-style="versatiles-colorful"&gt;&lt;/vectormap&gt;
 
-// eigene MapLibre-Karte (nach vectormaps.min.js als Modul):
+// eigene MapLibre-Karte (nach vectormaps.min.js):
 &lt;script type="module"&gt;
+await VectorMaps.ready;
 const map = new maplibregl.Map({
     container: 'map',
     style: vmProxyStyleUrl('versatiles-gray'),   // bzw. VM_EXTRA_STYLES['versatiles-gray'] als Original-URL
@@ -1162,12 +1164,13 @@ const map = new maplibregl.Map({
                 <h4 style="margin-top:0">MapTiler Cloud <small class="text-muted">API-Key erforderlich</small></h4>
                 <p>MapTiler bietet hochwertige Stile und weltweite Tile-Abdeckung. Kostenloser Plan mit 100.000 Map-Loads/Monat. API-Key unter <a href="https://cloud.maptiler.com" target="_blank" rel="noopener">cloud.maptiler.com</a> erstellen. Durch den REDAXO-Proxy bleibt der API-Key serverseitig und Besucher-IPs erreichen MapTiler nicht.</p>
                 <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;link rel="stylesheet" href="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('maplibre/maplibre-gl.css') ?&gt;"&gt;
-&lt;!-- MapLibre 6 ist ein ES-Modul und kommt mit vector_maps (danach global: window.maplibregl) --&gt;
-&lt;script type="module" src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
+&lt;!-- vector_maps lädt MapLibre 6 mit (danach global: window.maplibregl) --&gt;
+&lt;script defer src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 
 &lt;div id="map" style="width:100%;height:400px"&gt;&lt;/div&gt;
 
-&lt;script type="module"&gt;  // Module laufen nach vectormaps.min.js – maplibregl ist dann da
+&lt;script type="module"&gt;
+await VectorMaps.ready;   // MapLibre 6 ist geladen
 const MAPTILER_KEY = 'DEIN_API_KEY'; // https://cloud.maptiler.com
 
 // Proxy-URL-Helper: alle Requests laufen durch REDAXO,
@@ -1209,13 +1212,14 @@ map.addControl(new maplibregl.NavigationControl());
                 <p>PMTiles ist ein einzelnes Archiv-Format, das alle Kacheln enthält. Die Tile-Datei liegt auf deinem Server – kein externer Tile-Server nötig. Lediglich die Schriftarten (Glyphs) werden über den REDAXO-Proxy von Protomaps geladen.</p>
                 <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;!-- MapLibre + PMTiles-Plugin --&gt;
 &lt;link rel="stylesheet" href="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('maplibre/maplibre-gl.css') ?&gt;"&gt;
-&lt;!-- MapLibre 6 ist ein ES-Modul und kommt mit vector_maps (danach global: window.maplibregl) --&gt;
-&lt;script type="module" src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
+&lt;!-- vector_maps lädt MapLibre 6 mit (danach global: window.maplibregl) --&gt;
+&lt;script defer src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 &lt;script src="https://unpkg.com/pmtiles@4/dist/pmtiles.js"&gt;&lt;/script&gt;
 
 &lt;div id="map" style="width:100%;height:400px"&gt;&lt;/div&gt;
 
-&lt;script type="module"&gt;  // Module laufen nach vectormaps.min.js – maplibregl ist dann da
+&lt;script type="module"&gt;
+await VectorMaps.ready;   // MapLibre 6 ist geladen
 // PMTiles-Protokoll aktivieren
 const protocol = new pmtiles.Protocol();
 maplibregl.addProtocol('pmtiles', protocol.tile);
@@ -1289,12 +1293,13 @@ const map = new maplibregl.Map({
                 <h4 style="margin-top:0">Stadia Maps <small class="text-muted">kostenlos bis 200.000 Kacheln/Monat</small></h4>
                 <p>Stadia Maps (ehemals Stamen) bietet hochwertige Raster- und Vektorkacheln. Der Free-Plan erlaubt nicht-kommerzielle Nutzung ohne API-Key. Mit dem REDAXO-Proxy wird die Besucher-IP niemals an Stadia übertragen.</p>
                 <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;link rel="stylesheet" href="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('maplibre/maplibre-gl.css') ?&gt;"&gt;
-&lt;!-- MapLibre 6 ist ein ES-Modul und kommt mit vector_maps (danach global: window.maplibregl) --&gt;
-&lt;script type="module" src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
+&lt;!-- vector_maps lädt MapLibre 6 mit (danach global: window.maplibregl) --&gt;
+&lt;script defer src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 
 &lt;div id="map" style="width:100%;height:400px"&gt;&lt;/div&gt;
 
-&lt;script type="module"&gt;  // Module laufen nach vectormaps.min.js – maplibregl ist dann da
+&lt;script type="module"&gt;
+await VectorMaps.ready;   // MapLibre 6 ist geladen
 function proxyUrl(url) {
     return window.location.origin
         + '/?rex_api_vector_maps_proxy=1&amp;target_url='
@@ -1351,12 +1356,13 @@ map.addControl(new maplibregl.NavigationControl());
                 <h4 style="margin-top:0">OpenStreetMap Raster-Tiles <small class="text-muted">Community-Server · kein API-Key</small></h4>
                 <p>Raster-Tiles aus OpenStreetMap. MapLibre löst die <code>{z}/{x}/{y}</code>-Template-URL auf und ruft <code>transformRequest</code> auf – so werden alle Tile-Requests automatisch durch den REDAXO-Proxy geleitet.</p>
                 <pre style="margin:0;font-size:12px;line-height:1.6"><code>&lt;link rel="stylesheet" href="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('maplibre/maplibre-gl.css') ?&gt;"&gt;
-&lt;!-- MapLibre 6 ist ein ES-Modul und kommt mit vector_maps (danach global: window.maplibregl) --&gt;
-&lt;script type="module" src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
+&lt;!-- vector_maps lädt MapLibre 6 mit (danach global: window.maplibregl) --&gt;
+&lt;script defer src="&lt;?= rex_addon::get('vector_maps')-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 
 &lt;div id="map" style="width:100%;height:400px"&gt;&lt;/div&gt;
 
-&lt;script type="module"&gt;  // Module laufen nach vectormaps.min.js – maplibregl ist dann da
+&lt;script type="module"&gt;
+await VectorMaps.ready;   // MapLibre 6 ist geladen
 function proxyUrl(url) {
     return window.location.origin
         + '/?rex_api_vector_maps_proxy=1&amp;target_url='

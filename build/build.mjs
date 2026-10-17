@@ -27,7 +27,8 @@ const isUpdateVendor = process.argv.includes('--update-vendor');
 // ---------------------------------------------------------------------------
 
 const ownJsFiles = [
-    'build/vectormaps.js',
+    'build/vectormaps.js',          // Lader (klassisch) – holt vectormaps.module.js per import()
+    'build/vectormaps.module.js',   // eigentliche Komponente (ES-Modul, importiert MapLibre 6)
     'build/vectormaps_i18n.js',
     'build/theme-editor.js',
     'build/regions-editor.js',

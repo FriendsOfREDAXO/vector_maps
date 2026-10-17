@@ -107,13 +107,8 @@ if (rex::isBackend() && rex::getUser()) {
     rex_view::addCssFile($vmVer('build/vectormaps.css'));
     rex_view::addCssFile($vmVer('maplibre/maplibre-gl.css'));
     rex_view::addJsFile($vmVer('build/vectormaps_i18n.js'));
-    // vectormaps.js ist ein ES-Modul (importiert MapLibre 6) – rex_view kennt kein type="module", daher per OUTPUT_FILTER
-    $vmModule = $vmVer('build/vectormaps.js');
-    rex_extension::register('OUTPUT_FILTER', static function (\rex_extension_point $ep) use ($vmModule): string {
-        $tag = '<script type="module" src="' . rex_escape($vmModule) . '"></script>';
-
-        return str_replace('</body>', $tag . '</body>', (string) $ep->getSubject());
-    });
+    // Lader (klassisch) – holt das ES-Modul vectormaps.module.js mit MapLibre 6 nach
+    rex_view::addJsFile($vmVer('build/vectormaps.js'));
 
     // Theme-Editor-Script nur auf der Themes-Seite laden
     if (rex_be_controller::getCurrentPage() === 'vector_maps/themes') {
@@ -159,8 +154,9 @@ if (!rex::isBackend()) {
             $themeBaseStyles = json_encode(ThemeManager::getBaseStyleMap(), JSON_UNESCAPED_UNICODE);
             $js  = '<script>window.VM_THEME_BASE_STYLES = ' . $themeBaseStyles . ";</script>
 "
-                 // ES-Modul (importiert MapLibre 6 selbst, Worker liegt daneben) – Module laden wie defer
-                 . '<script type="module" src="' . $vmFe('build/vectormaps.js') . "\"></script>
+                 // Lader (klassisch, defer) – holt das ES-Modul mit MapLibre 6 nach; funktioniert auch, wenn Optimierer
+                 // oder Lazy-Loader das Script-Tag umschreiben
+                 . '<script defer src="' . $vmFe('build/vectormaps.js') . "\"></script>
 ";
             $subject = str_replace('</head>', $css . '</head>', $subject);
             $subject = str_replace('</body>', $js . '</body>', $subject);

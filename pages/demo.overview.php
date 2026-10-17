@@ -212,8 +212,8 @@ echo BackendHero::render(
 
   &lt;vectormap lat="51.43" lng="6.77" zoom="13"&gt;&lt;/vectormap&gt;
 
-  &lt;!-- 3. Vector Maps Web Component – ES-Modul, l&auml;dt MapLibre GL JS 6 selbst --&gt;
-  &lt;script type="module" src="&lt;?= $vmAddon-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
+  &lt;!-- 3. Vector Maps Web Component – l&auml;dt MapLibre GL JS 6 selbst nach --&gt;
+  &lt;script defer src="&lt;?= $vmAddon-&gt;getAssetsUrl('build/vectormaps.min.js') ?&gt;"&gt;&lt;/script&gt;
 &lt;/body&gt;
 &lt;/html&gt;</pre>
 

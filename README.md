@@ -16,7 +16,7 @@ Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, alle 
 ## Features
 
 - **Kein API-Key erforderlich** – freie Vektorkarten von [OpenFreeMap](https://openfreemap.org/), [VersaTiles](https://versatiles.org/) und [basemap.de](https://basemap.de/) (BKG, Deutschland) sowie ESRI-Satellitenbild – siehe [Kostenlose Kartenstile](#kostenlose-kartenstile)
-- **MapLibre GL JS 6** – als ES-Modul eingebunden, Worker vom eigenen Server (WebGL2 erforderlich)
+- **MapLibre GL JS 6** – wird automatisch nachgeladen (ES-Modul), Worker vom eigenen Server (WebGL2 erforderlich)
 - **DSGVO-konform** – externer Datenverkehr wird vollständig über einen PHP-Proxy geleitet; Whitelist per Extension Point `VECTOR_MAPS_PROXY_DOMAINS` und Backend-Einstellungen erweiterbar
 - **Web Component** `<vectormap>` – direkt im Template oder Modul verwendbar, kein JavaScript nötig
 - **Lazy-Init + Build-Queue** – WebGL-Kontext wird sequentiell für jede Karte aufgebaut, erst wenn sie in den Viewport scrollt (verhindert Browserlimit von ~10 parallelen WebGL-Kontexten)
@@ -83,12 +83,13 @@ Nach der Installation lädt das AddOn alle benötigten Assets **automatisch im F
 ```
 maplibre-gl.css          → MapLibre GL JS Kern-Styles
 vectormaps.css           → Web Component Styles + Dark Mode
-vectormaps.js            → <vectormap> Custom Element (ES-Modul, lädt MapLibre GL JS 6 selbst)
+vectormaps.js            → Lader (klassisches Skript) – holt vectormaps.module.js nach
+vectormaps.module.js     → <vectormap> Custom Element (ES-Modul, importiert MapLibre GL JS 6)
 maplibre-gl.mjs          → MapLibre GL JS 6 (wird von vectormaps.js importiert)
 maplibre-gl-worker.mjs   → MapLibre-Worker (liegt daneben, wird automatisch gefunden)
 ```
 
-> **Ab Version 2.0 (MapLibre 6):** `vectormaps.js` ist ein ES-Modul und wird mit `<script type="module">` eingebunden. Ein eigenes `maplibre-gl.js` gibt es nicht mehr. `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen stehen weiter global bereit, sobald das Modul geladen ist (Ereignis `vectormaps:ready`, Promise `window.VectorMaps.ready`). MapLibre 6 braucht **WebGL2**; fehlt es, zeigt die Karte einen Hinweis statt einer leeren Fläche.
+> **Ab Version 2.0 (MapLibre 6):** Eingebunden wird wie bisher nur `vectormaps.min.js` – das ist ein kleiner Lader, der die eigentliche Komponente (`vectormaps.module.min.js`, ES-Modul mit MapLibre 6) per `import()` nachholt. Das funktioniert mit `<script src>`, `defer`, `type="module"` und auch, wenn Lazy-Loader oder Optimierer das Skript-Tag umschreiben (ab 2.0.1). `maplibre-gl.js` gibt es nicht mehr. `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen stehen global bereit, sobald `window.VectorMaps.ready` erfüllt ist (bzw. Ereignis `vectormaps:ready`). MapLibre 6 braucht **WebGL2**; fehlt es, zeigt die Karte einen Hinweis statt einer leeren Fläche.
 
 Danach kann `<vectormap>` direkt in jedem Template, Modul oder Artikel verwendet werden:
 
@@ -119,8 +120,8 @@ $vmAddon = rex_addon::get('vector_maps');
     <!-- Karten-Tags hier platzieren -->
     <vectormap lat="51.43" lng="6.77" zoom="13"></vectormap>
 
-    <!-- Vector Maps Web Component – ES-Modul, importiert MapLibre GL JS 6 selbst (Module laden wie defer) -->
-    <script type="module" src="<?= $vmAddon->getAssetsUrl('build/vectormaps.min.js') ?>"></script>
+    <!-- Vector Maps Web Component – lädt MapLibre GL JS 6 selbst nach -->
+    <script defer src="<?= $vmAddon->getAssetsUrl('build/vectormaps.min.js') ?>"></script>
 </body>
 </html>
 ```
@@ -231,11 +232,12 @@ Damit eignet sich dasselbe Element sowohl für eine einfache Marker-Karte als au
 
 ### Eigener JavaScript-Code mit MapLibre (ab 2.0)
 
-`vectormaps.js` ist ein ES-Modul. Eigene Skripte, die `maplibregl`, `vmProxyUrl()` usw. nutzen, laufen deshalb erst, wenn das Modul geladen ist:
+MapLibre und die vector_maps-Funktionen werden nachgeladen. Eigene Skripte, die `maplibregl`, `vmProxyUrl()` usw. nutzen, warten deshalb auf `VectorMaps.ready`:
 
 ```html
-<!-- einfach: selbst als Modul einbinden – Module laufen in Reihenfolge nach vectormaps.min.js -->
+<!-- als Modul (nach vectormaps.min.js): auf das Laden warten -->
 <script type="module">
+    await VectorMaps.ready;
     const map = new maplibregl.Map({ container: 'map', style: vmProxyStyleUrl('liberty'), transformRequest: vmTransformRequest });
 </script>
 
@@ -1343,7 +1345,8 @@ Der `build/`-Ordner enthält das Build-Tooling für Entwickler. **Für den norma
 vector_maps/
 ├── assets/
 │   ├── build/                   # Eigene Assets (Quelle + kompiliert)
-│   │   ├── vectormaps.js        # Quelle: <vectormap> Web Component + Picker
+│   │   ├── vectormaps.js        # Quelle: Lader (klassisch, holt das Modul nach)
+│   │   ├── vectormaps.module.js # Quelle: <vectormap> Web Component + Picker (ES-Modul)
 │   │   ├── vectormaps.min.js    # Minifiziert (vom Build generiert)
 │   │   ├── vectormaps_i18n.js   # Quelle: Frontend-Übersetzungen
 │   │   ├── vectormaps_i18n.min.js
@@ -1354,7 +1357,7 @@ vector_maps/
 │   │   ├── vectormaps.css       # Quelle: Styles
 │   │   └── vectormaps.min.css   # Minifiziert (vom Build generiert)
 │   └── maplibre/                # Vendor-Assets (von npm kopiert)
-│       ├── maplibre-gl.mjs      # MapLibre GL JS 6 (ES-Modul, von vectormaps.js importiert)
+│       ├── maplibre-gl.mjs      # MapLibre GL JS 6 (ES-Modul, von vectormaps.module.js importiert)
 │       ├── maplibre-gl-worker.mjs # MapLibre-Worker (muss neben maplibre-gl.mjs liegen)
 │       ├── maplibre-gl.css      # MapLibre GL JS Styles
 │       └── pmtiles.js           # PMTiles-Decoder
