@@ -313,6 +313,9 @@
         const url = new URL(window.location.href);
         // Bestehende Parameter (z. B. page=…) beibehalten – entfernt nur den API-Action-Param
         url.searchParams.set('rex_api_vm_theme_action', action);
+        // CSRF-Token (boot.php: rex.vector_maps_theme_csrf)
+        const csrf = (window.rex && window.rex.vector_maps_theme_csrf) || {};
+        Object.entries(csrf).forEach(([k, v]) => url.searchParams.set(k, v));
         return url.toString();
     }
 

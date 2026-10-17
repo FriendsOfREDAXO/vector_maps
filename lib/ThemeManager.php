@@ -39,10 +39,15 @@ class ThemeManager
     /**
      * Gibt das Themes-Verzeichnis zurück und legt es bei Bedarf an.
      */
+    /** @var array<string, array<string, mixed>>|null */
+    private static ?array $cache = null;
+
     private static function getThemesDir(): string
     {
         $dir = rex_addon::get('vector_maps')->getDataPath('themes');
-        rex_dir::create($dir);
+        if (!is_dir($dir)) {
+            rex_dir::create($dir);
+        }
         return $dir;
     }
 
@@ -60,6 +65,10 @@ class ThemeManager
      */
     public static function getCustomThemes(): array
     {
+        // je Anfrage nur einmal lesen (Backend, jede Karte, jedes Picker-Feld fragen danach)
+        if (null !== self::$cache) {
+            return self::$cache;
+        }
         $dir    = self::getThemesDir();
         $themes = [];
         foreach (glob($dir . '/*.json') ?: [] as $file) {
@@ -73,7 +82,7 @@ class ThemeManager
                 $themes[$name] = $data;
             }
         }
-        return $themes;
+        return self::$cache = $themes;
     }
 
     /**
@@ -245,6 +254,20 @@ class ThemeManager
         rex_response::cleanOutputBuffers();
 
         $action = rex_request('rex_api_vm_theme_action', 'string', '');
+
+        // Nur mit Recht auf das AddOn; Speichern/Löschen zusätzlich mit CSRF-Token (theme-editor.js schickt es mit)
+        $user = \rex::getUser();
+        if (!$user || !$user->hasPerm('vector_maps[]')) {
+            rex_response::setStatus(rex_response::HTTP_FORBIDDEN);
+            rex_response::sendJson(['error' => 'Forbidden']);
+            exit;
+        }
+        if (in_array($action, ['save', 'delete', 'import'], true) && !\rex_csrf_token::factory('vector_maps_themes')->isValid()) {
+            rex_response::setStatus(rex_response::HTTP_FORBIDDEN);
+            rex_response::sendJson(['error' => 'CSRF token invalid']);
+            exit;
+        }
+        self::$cache = null;
 
         switch ($action) {
             case 'save':

@@ -1067,7 +1067,7 @@
                     id: 'vm-label-region-bg',
                     type: 'circle',
                     source: sourceId,
-                    filter: ['all', ['==', '$type', 'Point'], ['==', ['get', 'vm_label'], true], ['==', ['get', 'label_kind'], 'region']],
+                    filter: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['==', ['get', 'vm_label'], true], ['==', ['get', 'label_kind'], 'region']],
                     paint: {
                         'circle-radius': 16,
                         'circle-color': ['coalesce', ['get', 'label_bg'], '#111827'],
@@ -1079,7 +1079,7 @@
                     id: 'vm-labels',
                     type: 'symbol',
                     source: sourceId,
-                    filter: ['all', ['==', '$type', 'Point'], ['==', ['get', 'vm_label'], true]],
+                    filter: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['==', ['get', 'vm_label'], true]],
                     layout: {
                         'text-field': ['coalesce', ['get', 'label'], ['get', 'name'], ''],
                         'text-size': ['case', ['==', ['get', 'label_kind'], 'region'], 13, 11],

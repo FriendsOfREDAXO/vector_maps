@@ -175,15 +175,14 @@ class VectorMapPicker {
                 btn.className = 'btn btn-xs btn-primary vm-style-btn active';
                 this.currentPickerStyle = btn.dataset.style || 'liberty';
                 this.updateThemeSelectState();
-                if (this.map) {
-                    this.map.setStyle(this.proxyStyleUrl(this.currentPickerStyle));
-                    this.map.once('idle', () => this.applyCurrentPickerTheme());
-                }
+                if (this.map) this.setPickerStyle(this.currentPickerStyle);
             });
         });
     }
 
     initAll() {
+        // Karten, deren Element nicht mehr im Dokument ist (PJAX, <vectormap> ohne disconnectedCallback), lösen
+        vmSweepDetachedMaps();
         document.querySelectorAll('input[data-vector-picker="1"]:not(.vm-initialized)').forEach(input => {
             input.classList.add('vm-initialized');
             this.setupInput(input);
@@ -296,10 +295,21 @@ class VectorMapPicker {
         }
         this.updateThemeSelectState();
 
-        if (this.map) {
-            this.map.setStyle(this.proxyStyleUrl(styleName));
-            this.map.once('idle', () => this.applyCurrentPickerTheme());
+        if (this.map) this.setPickerStyle(styleName);
+    }
+
+    /** Stil der Picker-Karte wechseln – nur bei Änderung; danach Sprache und Theme wieder setzen */
+    setPickerStyle(styleName) {
+        if (this._pickerStyleName === styleName) {
+            this.applyCurrentPickerTheme();
+            return;
         }
+        this._pickerStyleName = styleName;
+        this.map.setStyle(this.proxyStyleUrl(styleName));
+        this.map.once('idle', () => {
+            if (styleName !== 'satellite') vmSetLanguage(this.map, (document.documentElement.lang || navigator.language || 'de').slice(0, 2));
+            this.applyCurrentPickerTheme();
+        });
     }
 
     populateThemeChoices(input) {
@@ -430,6 +440,7 @@ class VectorMapPicker {
         }
 
         if (!this.map) {
+            this._pickerStyleName = this.currentPickerStyle || 'liberty';
             this.map = new maplibregl.Map({
                 container: 'vm-picker-map',
                 style: this.proxyStyleUrl(this.currentPickerStyle || 'liberty'),
@@ -687,7 +698,9 @@ class VectorMapPicker {
         });
         map.on('styledata', () => {
             if (!map.isStyleLoaded()) return;
-            if (!_isSatellite()) add3dBuildings();
+            // nur wenn der 3D-Schalter an ist – sonst kämen ausgeschaltete Gebäude bei jedem Theme-/Sprachwechsel zurück
+            const t3d = document.getElementById('vm-demo-3d-toggle');
+            if (!_isSatellite() && (!t3d || t3d.classList.contains('active'))) add3dBuildings();
         });
 
         // Hilfsfunktion: Sprache + Theme nach Stil-Wechsel einmalig sauber anwenden
@@ -792,6 +805,11 @@ class VectorMapPicker {
      route-panel               Interaktives Route-Panel mit Adresssuche einblenden
      route-to-locked           Zieladresse im Route-Panel fixieren (nicht änderbar, kein Autocomplete)
      route-no-steps            Abbiegehinweise im Route-Panel ausblenden
+     map-apps                   Knopf „In Karten-App öffnen“ (Google Maps, Apple Karten, OpenStreetMap, Waze)
+                                optional Liste: map-apps="google,apple,osm,waze"; mit route-panel im Panel
+     map-apps-target="…"        Ziel (Adresse oder lat,lng) – sonst route-to, erster Marker, Kartenmitte
+     map-apps-label="…"         Beschriftung des Knopfs
+     map-apps-position="…"      Ecke ohne route-panel (Standard: bottom-left)
      nearby="amenity=charging_station" Overpass-Filter für POI-Umgebungssuche
      nearby-radius="1000"       Suchradius in Metern (Standard: 1000)
      nearby-label="Ladestn."    Label für Marker-Popups (optional, sonst OSM-Tags)
@@ -1010,30 +1028,94 @@ function vmTransformRequest(url) {
 }
 
 /**
- * Ersetzt ['get', prop] (auch tief in Expressions) durch ['coalesce', ['get', prop], 0].
- * Verhindert MapLibre-Warnungen "Expected value to be of type number, but found null"
- * when OSM buildings lack height/min_height attributes.
+ * Sichert ['get', …] in numerischen Expressions mit einem Fallback ab: ['coalesce', ['get', …], 0].
+ * Verhindert MapLibre-Warnungen "Expected value to be of type number, but found null", z. B. wenn
+ * OSM-Gebäude keine height/min_height haben.
+ *
+ * Idempotent: Ein ['get', …], das direkt in einem coalesce steht, ist schon abgesichert und bleibt
+ * unverändert; verschachtelte coalesce werden zusammengefasst und Argumente hinter dem ersten festen
+ * Wert entfernt (nie erreicht). So wächst die Expression bei wiederholtem Aufruf (Sprachwechsel,
+ * styledata) nicht, und früher mehrfach eingewickelte Styles werden wieder gerade
+ * (['coalesce', ['coalesce', ['get', 'x'], 0], 0] → ['coalesce', ['get', 'x'], 0]).
+ * Auch die Reihenfolge bleibt richtig: ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]
+ * bleibt so – vorher wurde daraus coalesce(coalesce(render_height, 0), …) und height griff nie.
+ *
+ * @param {*} expr
+ * @param {string|null} prop nur dieses Feld absichern (null = jedes get)
+ * @returns {*}
+ */
+// Ausdrücke, deren Argumente keine Zahlenwerte sind (Vergleiche, Bedingungen, Text): dort nichts absichern
+const VM_GUARD_SKIP = new Set(['==', '!=', '<', '<=', '>', '>=', '!', 'all', 'any', 'none', 'has', '!has', 'in', '!in',
+    'to-boolean', 'to-string', 'typeof', 'geometry-type', 'id', 'properties', 'feature-state', 'zoom', 'literal',
+    'within', 'distance', 'is-supported-script', 'collator', 'format', 'image', 'number-format', 'concat',
+    'downcase', 'upcase', 'resolved-locale', 'get', 'at', 'index-of', 'slice', 'length']);
+
+function vmGuardGets(expr, prop) {
+    if (!Array.isArray(expr) || expr.length === 0 || typeof expr[0] !== 'string') {
+        return Array.isArray(expr) ? expr.map((e) => vmGuardGets(e, prop)) : expr;
+    }
+    const isGet = (e) => Array.isArray(e) && e[0] === 'get';
+    const op = expr[0];
+    if (op === 'get') return (prop === null || expr[1] === prop) ? ['coalesce', expr, 0] : expr;
+    if (VM_GUARD_SKIP.has(op)) return expr;
+    // nur Ausgabewerte absichern – Eingaben, Bedingungen und Stufen bleiben, wie sie sind
+    const guardAt = (i) => vmGuardGets(expr[i], prop);
+    if (op === 'match') {          // ['match', input, label, output, …, fallback]
+        return expr.map((e, i) => (i >= 3 && (i % 2 === 1 || i === expr.length - 1) ? guardAt(i) : e));
+    }
+    if (op === 'case') {           // ['case', cond, output, …, fallback]
+        return expr.map((e, i) => (i >= 2 && (i % 2 === 0 || i === expr.length - 1) ? guardAt(i) : e));
+    }
+    if (op === 'interpolate' || op === 'interpolate-hcl' || op === 'interpolate-lab') {   // [op, type, input, stop, output, …]
+        return expr.map((e, i) => (i >= 4 && i % 2 === 0 ? guardAt(i) : e));
+    }
+    if (op === 'step') {           // ['step', input, output0, stop, output, …]
+        return expr.map((e, i) => (i >= 2 && i % 2 === 0 ? guardAt(i) : e));
+    }
+    if (op !== 'coalesce') return expr.map((e, i) => (i === 0 ? e : vmGuardGets(e, prop)));
+
+    // coalesce: Argumente bearbeiten (gets direkt darin sind schon abgesichert), verschachtelte coalesce einebnen
+    // Steht ein coalesce nicht am Ende, ist seine abschließende 0 ein früher angehängter Fallback, der die
+    // folgenden Argumente verdecken würde – weglassen (coalesce(coalesce(a, 0), b, 0) → coalesce(a, b, 0)).
+    const args = [];
+    const rest = expr.slice(1);
+    rest.forEach((arg, i) => {
+        const done = isGet(arg) ? arg : vmGuardGets(arg, prop);
+        if (Array.isArray(done) && done[0] === 'coalesce') {
+            const inner = done.slice(1);
+            if (i < rest.length - 1 && inner.length > 1 && inner[inner.length - 1] === 0) inner.pop();
+            args.push(...inner);
+        } else {
+            args.push(done);
+        }
+    });
+    // hinter dem ersten festen Wert (Zahl, Text, true/false) wird nichts mehr ausgewertet
+    const fixed = args.findIndex((a) => a !== null && !Array.isArray(a));
+    const out = fixed === -1 ? args : args.slice(0, fixed + 1);
+    // endet die Kette mit einem get des gesuchten Felds, fehlt der Fallback
+    const last = out[out.length - 1];
+    if (isGet(last) && (prop === null || last[1] === prop)) out.push(0);
+
+    return ['coalesce', ...out];
+}
+
+/**
+ * Sichert ['get', prop] (auch tief in Expressions) mit coalesce ab – siehe vmGuardGets().
  * @param {*} expr
  * @param {string} prop
  * @returns {*}
  */
 function vmWrapGetWithCoalesce(expr, prop) {
-    if (!Array.isArray(expr)) return expr;
-    if (expr[0] === 'get' && expr[1] === prop) return ['coalesce', expr, 0];
-    return expr.map(e => vmWrapGetWithCoalesce(e, prop));
+    return vmGuardGets(expr, prop);
 }
 
 /**
- * Ersetzt rekursiv alle ['get', ...]-Expressions durch
- * ['coalesce', ['get', ...], 0], damit numerische Properties bei
- * fehlenden/null Featurewerten nicht warnen.
+ * Sichert alle ['get', …] in numerischen Expressions mit coalesce ab – siehe vmGuardGets().
  * @param {*} expr
  * @returns {*}
  */
 function vmWrapAnyGetWithCoalesce(expr) {
-    if (!Array.isArray(expr)) return expr;
-    if (expr[0] === 'get') return ['coalesce', expr, 0];
-    return expr.map((entry) => vmWrapAnyGetWithCoalesce(entry));
+    return vmGuardGets(expr, null);
 }
 
 /**
@@ -1184,6 +1266,22 @@ function vmFixExtrusionLayers(map) {
 }
 
 /**
+ * Paint-/Layout-Eigenschaft nur setzen, wenn sich der Wert ändert. setPaintProperty/setLayoutProperty lösen
+ * „styledata“ aus; Handler, die darauf Theme oder Sprache neu anwenden, liefen sonst endlos weiter.
+ */
+function vmSetPaint(map, layerId, prop, value) {
+    const cur = map.getPaintProperty(layerId, prop);
+    if (cur === value || JSON.stringify(cur) === JSON.stringify(value)) return;
+    map.setPaintProperty(layerId, prop, value);
+}
+
+function vmSetLayout(map, layerId, prop, value) {
+    const cur = map.getLayoutProperty(layerId, prop);
+    if (cur === value || JSON.stringify(cur) === JSON.stringify(value)) return;
+    map.setLayoutProperty(layerId, prop, value);
+}
+
+/**
  * Wendet ein Theme-Farbobjekt auf eine geladene MapLibre-Karte an.
  * Iteriert alle Layer und überschreibt Farb-Properties nach Source-Layer und Typ.
  * @param {maplibregl.Map} map
@@ -1205,36 +1303,38 @@ function vmApplyTheme(map, colors) {
         try {
             // Eigene Route-Layer (dynamisch via vmAddRoutePanel hinzugefügt)
             if (layer.id === 'vm-route-line') {
-                if (colors.route_line) map.setPaintProperty(layer.id, 'line-color', colors.route_line);
+                if (colors.route_line) vmSetPaint(map, layer.id, 'line-color', colors.route_line);
             } else if (type === 'background') {
-                map.setPaintProperty(layer.id, 'background-color', colors.land);
+                vmSetPaint(map, layer.id, 'background-color', colors.land);
+            } else if (type === 'symbol' && !sl) {
+                // eigene Beschriftungen (Cluster-Zahlen, Regionen-Labels) behalten ihre Farben
             } else if (type === 'symbol') {
                 // transportation_name-Layer (Straßen-/Autobahnbeschriftungen): road_label statt label
                 const isRoadLabel = sl === 'transportation_name';
                 const textColor   = isRoadLabel && colors.road_label ? colors.road_label : colors.label;
-                map.setPaintProperty(layer.id, 'text-color', textColor);
-                map.setPaintProperty(layer.id, 'text-halo-color', colors.label_halo);
+                vmSetPaint(map, layer.id, 'text-color', textColor);
+                vmSetPaint(map, layer.id, 'text-halo-color', colors.label_halo);
                 if (haloWidth !== null && !isNaN(haloWidth)) {
-                    map.setPaintProperty(layer.id, 'text-halo-width', haloWidth);
+                    vmSetPaint(map, layer.id, 'text-halo-width', haloWidth);
                 }
                 // Hinweis: icon-color wirkt nur bei SDF-Sprites — OFM Liberty nutzt PNG-Sprites
                 // für Autobahn-Schilder, daher kein road_shield-Feld.
             } else if (sl === 'water' || sl === 'waterway') {
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', colors.water);
-                    try { map.setPaintProperty(layer.id, 'fill-outline-color', colors.water); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', colors.water);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', colors.water); } catch (_) {}
                 }
-                if (type === 'line') map.setPaintProperty(layer.id, 'line-color', colors.water);
+                if (type === 'line') vmSetPaint(map, layer.id, 'line-color', colors.water);
             } else if (sl === 'park') {
                 // Schutzgebiete / Nationalparks (eigener Source-Layer in OFM Liberty)
                 const parkColor   = colors.farmland !== undefined ? colors.farmland : colors.green;
                 const parkOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : parkColor;
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', parkColor);
-                    if (applyOutlines) try { map.setPaintProperty(layer.id, 'fill-outline-color', parkOutline); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', parkColor);
+                    if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', parkOutline); } catch (_) {}
                 }
                 // park_outline ist ein separater line-Layer (rgba(228,241,215,1) im OFM-Standard)
-                if (type === 'line' && applyOutlines) map.setPaintProperty(layer.id, 'line-color', parkOutline);
+                if (type === 'line' && applyOutlines) vmSetPaint(map, layer.id, 'line-color', parkOutline);
             } else if (sl === 'landcover' || sl === 'landuse') {
                 // 3 Grün-Klassen: dunkles Grün (Wald), helles Grün (Wiesen/Parks), Land (sonstige Landnutzung)
                 const isDark  = /wood|forest|scrub/i.test(layer.id);
@@ -1244,23 +1344,23 @@ function vmApplyTheme(map, colors) {
                 else if (isLight) c = colors.farmland !== undefined ? colors.farmland : colors.green;
                 else              c = colors.land;
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', c);
-                    try { map.setPaintProperty(layer.id, 'fill-outline-color', c); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', c);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', c); } catch (_) {}
                 } else if (type === 'line') {
                     // Separate Outline-Layer (z.B. landuse_overlay_line) → gleiche Farbe
-                    map.setPaintProperty(layer.id, 'line-color', c);
+                    vmSetPaint(map, layer.id, 'line-color', c);
                 }
             } else if (sl === 'aeroway') {
                 // Flughafen-Flächen und Rollwege ähnlich wie Nebenstraßen einfärben
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', colors.road_minor);
-                    try { map.setPaintProperty(layer.id, 'fill-outline-color', colors.road_minor); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', colors.road_minor);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', colors.road_minor); } catch (_) {}
                 }
-                if (type === 'line') map.setPaintProperty(layer.id, 'line-color', colors.road_minor);
+                if (type === 'line') vmSetPaint(map, layer.id, 'line-color', colors.road_minor);
             } else if (sl === 'boundary') {
                 // Ländergrenzen / Verwaltungsgrenzen in Beschriftungsfarbe (gedämpft)
                 if (type === 'line') {
-                    try { map.setPaintProperty(layer.id, 'line-color', colors.label); } catch (_) {}
+                    try { vmSetPaint(map, layer.id, 'line-color', colors.label); } catch (_) {}
                 }
             } else if (sl === 'transportation') {
                 const isMajor = /motorway|trunk|primary/i.test(layer.id);
@@ -1271,27 +1371,27 @@ function vmApplyTheme(map, colors) {
                         // Casing/Outline-Layer der Straßen — nur wenn customize_outlines aktiv
                         if (applyOutlines) {
                             const casingColor = colors.road_casing !== undefined ? colors.road_casing : colors.road_minor;
-                            map.setPaintProperty(layer.id, 'line-color', casingColor);
+                            vmSetPaint(map, layer.id, 'line-color', casingColor);
                         }
                     } else {
                         let lineColor;
                         if (isRail)       lineColor = colors.rail !== undefined ? colors.rail : colors.road_minor;
                         else if (isMajor) lineColor = colors.road_major;
                         else              lineColor = colors.road_minor;
-                        map.setPaintProperty(layer.id, 'line-color', lineColor);
+                        vmSetPaint(map, layer.id, 'line-color', lineColor);
                     }
                 }
             } else if (sl === 'building') {
                 const buildingOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : colors.building;
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', colors.building);
-                    if (applyOutlines) try { map.setPaintProperty(layer.id, 'fill-outline-color', buildingOutline); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', colors.building);
+                    if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', buildingOutline); } catch (_) {}
                 } else if (type === 'line') {
                     // Separate Gebäude-Outline-Layer — nur wenn customize_outlines aktiv
-                    if (applyOutlines) map.setPaintProperty(layer.id, 'line-color', buildingOutline);
+                    if (applyOutlines) vmSetPaint(map, layer.id, 'line-color', buildingOutline);
                 } else if (type === 'fill-extrusion') {
                     // 3D-Gebäude (dynamisch via vmAdd3dBuildings / add3dBuildings hinzugefügt)
-                    map.setPaintProperty(layer.id, 'fill-extrusion-color', colors.building);
+                    vmSetPaint(map, layer.id, 'fill-extrusion-color', colors.building);
                 }
             }
         } catch (_) { /* Einige Paint-Properties sind schreibgeschützt — ignorieren */ }
@@ -1304,16 +1404,25 @@ function vmApplyTheme(map, colors) {
  * @param {maplibregl.Map} map
  * @param {string} themeName
  */
+/** Theme-Daten je Seite nur einmal laden (mehrere Karten, Picker) – Name → Promise */
+const VM_THEME_CACHE = new Map();
+
 async function vmLoadAndApplyTheme(map, themeName) {
     let colors;
     let baseStyle = null;
+    // Karte nie unsichtbar lassen: bei Fehlern trotzdem einblenden
+    const reveal = () => { if (map._vmEl) map._vmEl.classList.add('vm-theme-ready'); };
     if (VM_BUILT_IN_THEMES[themeName]) {
         colors = VM_BUILT_IN_THEMES[themeName].colors;
     } else {
         try {
-            const resp = await fetch(window.location.origin + '/?rex_api_vector_maps_theme=' + encodeURIComponent(themeName), { cache: 'no-store' });
-            if (!resp.ok) { console.warn('<vectormap> Theme nicht gefunden:', themeName); return; }
-            const data = await resp.json();
+            if (!VM_THEME_CACHE.has(themeName)) {
+                VM_THEME_CACHE.set(themeName, fetch(window.location.origin + '/?rex_api_vector_maps_theme=' + encodeURIComponent(themeName), { cache: 'no-store' })
+                    .then((r) => (r.ok ? r.json() : null))
+                    .catch(() => null));
+            }
+            const data = await VM_THEME_CACHE.get(themeName);
+            if (!data) { VM_THEME_CACHE.delete(themeName); console.warn('<vectormap> Theme nicht gefunden:', themeName); reveal(); return; }
             colors = data.colors;
             if (typeof data.base_style === 'string') {
                 const candidate = data.base_style.toLowerCase();
@@ -1321,6 +1430,7 @@ async function vmLoadAndApplyTheme(map, themeName) {
             }
         } catch (e) {
             console.warn('<vectormap> Theme-Ladefehler:', e);
+            reveal();
             return;
         }
     }
@@ -1330,7 +1440,10 @@ async function vmLoadAndApplyTheme(map, themeName) {
         map._vmThemeSwitchingStyle = true;
         map._vmBaseStyle = baseStyle;
         map.setStyle(vmProxyStyleUrl(baseStyle));
+        // Merker spätestens nach 15 s lösen, falls 'idle' ausbleibt (Stil lädt nicht)
+        const release = setTimeout(() => { map._vmThemeSwitchingStyle = false; reveal(); }, 15000);
         map.once('idle', () => {
+            clearTimeout(release);
             map._vmThemeSwitchingStyle = false;
             vmLoadAndApplyTheme(map, themeName);
         });
@@ -1369,7 +1482,8 @@ function vmSetLanguage(map, lang) {
     const sepOther = '\n';
     const layers = map.getStyle().layers;
     for (const layer of layers) {
-        if (layer.type !== 'symbol') continue;
+        // nur Beschriftungen des Kartenstils (Vektorkacheln) – eigene Ebenen (Cluster-Zahlen, Regionen) behalten ihren Text
+        if (layer.type !== 'symbol' || !layer['source-layer']) continue;
         try {
             const tf = map.getLayoutProperty(layer.id, 'text-field');
             // Leer oder nur ref-Expressions (Straßennummern) → überspringen
@@ -1387,7 +1501,7 @@ function vmSetLanguage(map, lang) {
                 ['get', 'name'],
             ];
 
-            map.setLayoutProperty(layer.id, 'text-field', [
+            vmSetLayout(map, layer.id, 'text-field', [
                 'case',
                 ['has', 'name:nonlatin'],
                 // Zweizeilig: bevorzugte-Sprache\nnon-latin (für Arabisch, CJK …)
@@ -1419,6 +1533,14 @@ function initVectorMap(el) {
     el.style.height    = /^\d+$/.test(height) ? height + 'px' : height;
     el.style.position  = 'relative';
     el.style.overflow  = 'hidden';
+    el.style.setProperty('--vm-map-h', el.style.height);
+
+    // Schmale Karte (Handy, enge Spalte): Klasse vm-compact – Routenplaner als einklappbare Leiste unten,
+    // Seiten-Layout untereinander (vectormaps.css)
+    if ('ResizeObserver' in window && !el._vmResizeObs) {
+        el._vmResizeObs = new ResizeObserver(() => el.classList.toggle('vm-compact', el.clientWidth > 0 && el.clientWidth < 560));
+        el._vmResizeObs.observe(el);
+    }
 
     // Lazy init via IntersectionObserver — verhindert „Too many active WebGL contexts"
     // wenn viele <vectormap>-Elemente gleichzeitig auf der Seite vorhanden sind
@@ -1767,9 +1889,20 @@ const VM_MAX_MAPS = 10;
 
 function vmRegisterMap(map) {
     VM_ACTIVE_MAPS.push(map);
+    // entfernte Karten (Element weg, PJAX) aus der Liste nehmen – sonst wächst sie und hält alte Karten im Speicher
+    map.once('remove', () => {
+        const i = VM_ACTIVE_MAPS.indexOf(map);
+        if (i !== -1) VM_ACTIVE_MAPS.splice(i, 1);
+    });
     while (VM_ACTIVE_MAPS.length > VM_MAX_MAPS) {
-        const oldest = VM_ACTIVE_MAPS.shift();
-        try { oldest.remove(); } catch (_) {}
+        // die älteste Karte, die gerade nicht zu sehen ist (sichtbare nie abbauen)
+        const visible = (m) => {
+            const r = m.getContainer().getBoundingClientRect();
+            return r.bottom > 0 && r.top < window.innerHeight;
+        };
+        const victim = VM_ACTIVE_MAPS.find((m) => m !== map && !visible(m));
+        if (!victim) break;
+        try { victim.remove(); } catch (_) { VM_ACTIVE_MAPS.splice(VM_ACTIVE_MAPS.indexOf(victim), 1); }
     }
 }
 
@@ -1896,6 +2029,12 @@ function vmBuildMap(el) {
         vmAddRoutePanel(el, map);
     }
 
+    // „In Karten-App öffnen“ ohne Route-Panel: eigener Knopf auf der Karte
+    if (el.hasAttribute('map-apps') && !el.hasAttribute('route-panel')) {
+        const appsPos = vmNormalizeControlPosition(el.getAttribute('map-apps-position'), 'bottom-left');
+        map.addControl(new VMMapAppsControl(el), appsPos);
+    }
+
     const has3d = el.hasAttribute('3d');
 
     // Nearby-Suche hat eigenen load-Handler, damit Geolocation-Wartezeit korrekt gehandelt wird
@@ -1984,8 +2123,10 @@ function vmBuildMap(el) {
     // Debounce-Flag verhindert Endlosschleife: setPaintProperty feuert selbst styledata
     map.on('styledata', () => {
         if (!map.isStyleLoaded() || map._vmApplyingTheme) return;
-        if (has3d && !isRaster) vmAdd3dBuildings(map);
-        if (map._vmThemeColors && !isRaster) {
+        // aktueller Stil zählt (Satellit kann umgeschaltet sein), nicht der Startwert
+        const rasterNow = isRaster || !!map.getSource('satellite');
+        if (has3d && !rasterNow) vmAdd3dBuildings(map);
+        if (map._vmThemeColors && !rasterNow) {
             map._vmApplyingTheme = true;
             vmApplyTheme(map, map._vmThemeColors);
             // Asynchron zuruecksetzen: styledata aus setPaintProperty kommt via rAF
@@ -2536,6 +2677,7 @@ function vmAddRoutePanel(el, map) {
     const panel = document.createElement('div');
     panel.className = 'vm-route-panel';
     panel.innerHTML = `
+        <button type="button" class="vm-rp-toggle" aria-expanded="true"><span class="vm-rp-toggle-text">Route planen</span><span class="vm-rp-toggle-icon" aria-hidden="true"></span></button>
         <div class="vm-rp-field">
             <span class="vm-rp-label">Von</span>
             <div class="vm-rp-input-wrap">
@@ -2570,6 +2712,13 @@ function vmAddRoutePanel(el, map) {
     el._vmRoutePanel = panel;
     vmApplyRoutePanelPosition(el);
 
+    // „In Karten-App öffnen“: Ziel aus dem Feld „Nach“ (aktueller Wert beim Klick)
+    if (el.hasAttribute('map-apps')) {
+        const apps = vmMapAppsMenu(el, () => panel.querySelector('.vm-rp-to')?.value.trim() || vmMapAppsTarget(el));
+        apps.classList.add('vm-rp-apps');
+        panel.appendChild(apps);
+    }
+
     // Side-Layout: Panel als eigene Spalte links/rechts neben der Karte anordnen
     const layout = String(el.getAttribute('route-panel-layout') || '').toLowerCase();
     const mapPane = el._vmMapContainer || el.firstElementChild;
@@ -2585,6 +2734,19 @@ function vmAddRoutePanel(el, map) {
     const fromInput = panel.querySelector('.vm-rp-from');
     const toInput   = panel.querySelector('.vm-rp-to');
     const calcBtn   = panel.querySelector('.vm-rp-calc');
+
+    // Kleine Karten (Handy): Panel als Leiste unten, einklappbar – sonst verdeckt es die Karte.
+    // Der Knopf ist nur bei schmaler Karte sichtbar (CSS: Container-Abfrage auf das Element).
+    const toggleBtn = panel.querySelector('.vm-rp-toggle');
+    const isCompact = () => el.classList.contains('vm-compact') || (el.clientWidth > 0 && el.clientWidth < 560);
+    const setCollapsed = (on, label) => {
+        panel.classList.toggle('vm-rp-collapsed', on);
+        toggleBtn.setAttribute('aria-expanded', on ? 'false' : 'true');
+        toggleBtn.querySelector('.vm-rp-toggle-text').textContent = label || (on ? 'Route planen' : 'Einklappen');
+        requestAnimationFrame(() => { try { map.resize(); } catch (_) { /* */ } });
+    };
+    toggleBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('vm-rp-collapsed')));
+    if (isCompact() && !(initFrom && initTo)) setCollapsed(true);
     const clearBtn  = panel.querySelector('.vm-rp-clear');
     const locateBtn = panel.querySelector('.vm-rp-locate');
     let currentMode = initMode;
@@ -2637,7 +2799,7 @@ function vmAddRoutePanel(el, map) {
         // Suggestions schließen bei Klick außerhalb
         document.addEventListener('click', (e) => {
             if (!panel.contains(e.target)) hideSug(sugDiv);
-        }, { capture: true });
+        }, { capture: true, signal: vmSignal(el) });
     }
 
     async function fetchSug(q, input, sugDiv) {
@@ -2690,6 +2852,8 @@ function vmAddRoutePanel(el, map) {
             await vmDrawRoute(el, map, fromVal, toVal, currentMode);
             if (!noSteps) vmRenderSteps(panel, el._vmRouteSteps, map);
             clearBtn.style.display = '';
+            // Handy: nach der Berechnung einklappen, damit die Route sichtbar ist
+            if (isCompact()) setCollapsed(true, 'Route ändern');
         } catch (e) {
             console.warn('Route-Panel Fehler:', e);
         } finally {
@@ -2773,11 +2937,17 @@ function vmAddLocateButton(el, map) {
                 map.resize();
                 map.stop();
                 map.flyTo({ center: [longitude, latitude], zoom: 15, duration: 900 });
-                const userMarker = new maplibregl.Marker({ color: '#2b7095' })
-                    .setLngLat([longitude, latitude])
-                    .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setText('Ihr Standort'))
-                    .addTo(map);
-                vmBindPopupA11y(userMarker, userMarker.getPopup(), el);
+                // ein Standort-Marker je Karte – bei erneutem Klick nur verschieben
+                if (el._vmUserMarker) {
+                    el._vmUserMarker.setLngLat([longitude, latitude]);
+                } else {
+                    const userMarker = new maplibregl.Marker({ color: '#2b7095' })
+                        .setLngLat([longitude, latitude])
+                        .setPopup(new maplibregl.Popup({ focusAfterOpen: false }).setText('Ihr Standort'))
+                        .addTo(map);
+                    vmBindPopupA11y(userMarker, userMarker.getPopup(), el);
+                    el._vmUserMarker = userMarker;
+                }
             },
             () => { btn.classList.remove('vm-locating'); }
         );
@@ -3041,6 +3211,11 @@ function vmStartNearbyWithLocate(el, map, filter, radius, labelAttr) {
 async function vmLoadGeoJson(el, map) {
     const geojsonAttr = el.getAttribute('geojson');
     if (!geojsonAttr) return;
+    // schon geladen (z. B. zurück vom Satellitenbild): nicht neu abrufen
+    if (el._vmGeoJsonData) {
+        vmRenderGeoJson(el, map, el._vmGeoJsonData);
+        return;
+    }
 
     let data;
     const trimmed = geojsonAttr.trim();
@@ -3061,6 +3236,7 @@ async function vmLoadGeoJson(el, map) {
         }
     }
 
+    el._vmGeoJsonData = data;
     vmRenderGeoJson(el, map, data);
 }
 
@@ -3079,11 +3255,15 @@ function vmRenderGeoJson(el, map, data) {
     if (data.type === 'Feature')  data = { type: 'FeatureCollection', features: [data] };
     if (!data.features)           data = { type: 'FeatureCollection', features: [] };
 
-    const id = 'vm-geojson-' + Math.random().toString(36).slice(2, 7);
+    // feste ID je Element: nach einem Stilwechsel (Satellit ↔ Vektor) werden nur Quelle und Ebenen neu angelegt –
+    // Marker (überleben setStyle), Klick-Handler und das Einpassen nicht noch einmal
+    const firstRender = !el._vmGeoJsonId;
+    const id = el._vmGeoJsonId || (el._vmGeoJsonId = 'vm-geojson-' + Math.random().toString(36).slice(2, 7));
+    if (map.getSource(id)) return;
     map.addSource(id, { type: 'geojson', data });
 
-    // Legacy-Filter-Syntax ($type) — stabil in MapLibre v2–v4
-    // $type gruppiert automatisch: 'Polygon' trifft auch MultiPolygon, etc.
+    // Filter als Ausdrücke (['geometry-type'], Multi-Varianten eingeschlossen) – die alte $type-Syntax gemischt mit
+    // Ausdrücken ist ungültig (MapLibre verwirft den Filter, ab v6 ein Fehler)
     // fill- und circle-Layer brauchen keinen Filter (MapLibre ignoriert inkompatible Geometrien)
 
     // Flächen (Polygon / MultiPolygon) — Feature-Properties (fill, fill_opacity)
@@ -3097,14 +3277,14 @@ function vmRenderGeoJson(el, map, data) {
     });
     map.addLayer({
         id: id + '-fill-outline', type: 'line', source: id,
-        filter: ['==', '$type', 'Polygon'],
+        filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
         paint: { 'line-color': ['coalesce', ['get', 'fill'], color], 'line-width': 2 },
     });
 
     // Linien (LineString / MultiLineString)
     map.addLayer({
         id: id + '-line', type: 'line', source: id,
-        filter: ['==', '$type', 'LineString'],
+        filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
         paint: { 'line-color': color, 'line-width': 3, 'line-opacity': Math.min(opacity * 3, 1) },
         layout: { 'line-join': 'round', 'line-cap': 'round' },
     });
@@ -3119,7 +3299,7 @@ function vmRenderGeoJson(el, map, data) {
     const pointFeatures = data.features.filter(
         f => f.geometry && (f.geometry.type === 'Point' || f.geometry.type === 'MultiPoint') && !isLabelFeature(f)
     );
-    pointFeatures.forEach(f => {
+    if (firstRender) pointFeatures.forEach(f => {
         const props     = f.properties || {};
         const mColor    = props['marker-color'] || color;
         const mSymbol   = props['marker-symbol'] || '';
@@ -3177,7 +3357,7 @@ function vmRenderGeoJson(el, map, data) {
         id: id + '-labels-bg',
         type: 'circle',
         source: id,
-        filter: ['all', ['==', '$type', 'Point'], ['any', ['==', ['get', 'vm_label'], true], ['==', ['get', 'vm_label'], 1], ['==', ['get', 'vm_label'], '1']], ['==', ['get', 'label_kind'], 'region']],
+        filter: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['any', ['==', ['get', 'vm_label'], true], ['==', ['get', 'vm_label'], 1], ['==', ['get', 'vm_label'], '1']], ['==', ['get', 'label_kind'], 'region']],
         paint: {
             'circle-radius': 16,
             'circle-color': ['coalesce', ['get', 'label_bg'], '#111827'],
@@ -3189,7 +3369,7 @@ function vmRenderGeoJson(el, map, data) {
         id: id + '-labels',
         type: 'symbol',
         source: id,
-        filter: ['all', ['==', '$type', 'Point'], ['any', ['==', ['get', 'vm_label'], true], ['==', ['get', 'vm_label'], 1], ['==', ['get', 'vm_label'], '1']]],
+        filter: ['all', ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false], ['any', ['==', ['get', 'vm_label'], true], ['==', ['get', 'vm_label'], 1], ['==', ['get', 'vm_label'], '1']]],
         layout: {
             'text-field': ['coalesce', ['get', 'label'], ['get', 'name'], ''],
             'text-size': ['case', ['==', ['get', 'label_kind'], 'region'], 13, 11],
@@ -3206,7 +3386,7 @@ function vmRenderGeoJson(el, map, data) {
     });
 
     // Auto-Bounds: Karte auf alle GeoJSON-Features ausrichten (wenn kein fit-bounds="false")
-    if (el.getAttribute('fit-bounds') !== 'false') {
+    if (firstRender && el.getAttribute('fit-bounds') !== 'false') {
         try {
             const coords = [];
             data.features.forEach(f => {
@@ -3235,7 +3415,7 @@ function vmRenderGeoJson(el, map, data) {
 
     // Klick-Popups für Linien + Flächen (Punkte nutzen Marker-Popup)
     const clickLayers = [id + '-line', id + '-fill'];
-    clickLayers.forEach(layer => {
+    if (firstRender) clickLayers.forEach(layer => {
         map.on('click', layer, (e) => {
             const props = e.features[0].properties || {};
             let content = '';
@@ -3271,7 +3451,10 @@ function initOverflyDemo() {
     const el = document.getElementById('vm-overfly-map');
     if (!el || el._vmOverflyInit) return;
     el._vmOverflyInit = true;
+    let tries = 0;
     const pollTimer = setInterval(() => {
+        // aufgeben, wenn das Element weg ist oder nach 10 Minuten (Karte nie in Sicht gescrollt)
+        if (!el.isConnected || ++tries > 2400) { clearInterval(pollTimer); return; }
         if (!el._vmMap) return;
         clearInterval(pollTimer);
         const map = el._vmMap;
@@ -3288,7 +3471,7 @@ function initOverflyDemo() {
         } else {
             map.once('load', () => vmStartBerlinOverfly(map));
         }
-    }, 100);
+    }, 250);
 }
 
 /**
@@ -3383,7 +3566,11 @@ function vmStartBerlinOverfly(map) {
     };
 
     if (map.isStyleLoaded()) ensure3d();
-    map.on('styledata', () => { if (map.isStyleLoaded()) ensure3d(); });
+    // nur einmal je Karte anmelden – „Nochmal abspielen“ startet diese Funktion erneut
+    if (!map._vmOverfly3dBound) {
+        map._vmOverfly3dBound = true;
+        map.on('styledata', () => { if (map.isStyleLoaded()) ensure3d(); });
+    }
 
     let step = 0;
     map._vmOverflyRunning = true;
@@ -3427,7 +3614,9 @@ function initChargingStationDemo() {
     el._vmCsInit = true;
 
     // Warte auf die MapLibre-Instanz (lazy init via IntersectionObserver)
+    let tries = 0;
     const pollTimer = setInterval(() => {
+        if (!el.isConnected || ++tries > 2400) { clearInterval(pollTimer); return; }
         if (!el._vmMap) return;
         clearInterval(pollTimer);
         const map = el._vmMap;
@@ -3436,7 +3625,7 @@ function initChargingStationDemo() {
         } else {
             map.once('load', () => vmSetupCsDemo(el, map));
         }
-    }, 100);
+    }, 250);
 }
 
 /**
@@ -3509,10 +3698,15 @@ function vmSetupCsDemo(el, map) {
             }
             if (spinner) spinner.style.display = '';
             const b = map.getBounds();
-            const q = `[out:json][timeout:10];node["amenity"="charging_station"](${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()});out 200;`;
+            // auf 2 Nachkommastellen runden: gleiche Ausschnitte treffen den Server-Cache
+            const r2 = (v, up) => (up ? Math.ceil(v * 100) : Math.floor(v * 100)) / 100;
+            const q = `[out:json][timeout:10];node["amenity"="charging_station"](${r2(b.getSouth())},${r2(b.getWest())},${r2(b.getNorth(), true)},${r2(b.getEast(), true)});out 200;`;
             const url = vmProxyUrl('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q));
+            // vorige Abfrage abbrechen – sonst überschreibt eine späte alte Antwort die neue
+            if (el._vmCsAbort) el._vmCsAbort.abort();
+            const ctrl = el._vmCsAbort = new AbortController();
             try {
-                const data = await fetch(url).then(r => r.json());
+                const data = await fetch(url, { signal: ctrl.signal }).then(r => r.json());
                 const features = (data.elements || []).map(n => ({
                     type: 'Feature',
                     geometry: { type: 'Point', coordinates: [n.lon, n.lat] },
@@ -3532,7 +3726,8 @@ function vmSetupCsDemo(el, map) {
                         badge.textContent = features.length + more + 'Ladesäule' + (features.length !== 1 ? 'n' : '') + ' gefunden';
                     }
                 }
-            } catch (_) {
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;   // von einer neueren Abfrage ersetzt
                 if (badge) badge.textContent = 'API nicht erreichbar';
             } finally {
                 if (spinner) spinner.style.display = 'none';
@@ -3546,61 +3741,247 @@ function vmSetupCsDemo(el, map) {
 
 /* ---------- MapLibre GL Controls ---------- */
 
+/* ---------- In Karten-App öffnen ---------- */
+
+const VM_MAP_APPS = {
+    google: {
+        label: 'Google Maps',
+        url: (t) => 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(t.text),
+    },
+    apple: {
+        label: 'Apple Karten',
+        url: (t) => 'https://maps.apple.com/?daddr=' + encodeURIComponent(t.text),
+    },
+    osm: {
+        label: 'OpenStreetMap',
+        url: (t) => t.coords
+            ? 'https://www.openstreetmap.org/?mlat=' + t.coords[0] + '&mlon=' + t.coords[1] + '#map=17/' + t.coords[0] + '/' + t.coords[1]
+            : 'https://www.openstreetmap.org/search?query=' + encodeURIComponent(t.text),
+    },
+    waze: {
+        label: 'Waze',
+        url: (t) => t.coords
+            ? 'https://waze.com/ul?ll=' + t.coords[0] + ',' + t.coords[1] + '&navigate=yes'
+            : 'https://waze.com/ul?q=' + encodeURIComponent(t.text) + '&navigate=yes',
+    },
+};
+
+/** Ziel für „In Karten-App öffnen“: map-apps-target, route-to, erster Marker oder Kartenmitte */
+function vmMapAppsTarget(el) {
+    const explicit = (el.getAttribute('map-apps-target') || el.getAttribute('route-to') || '').trim();
+    if (explicit) return explicit;
+    try {
+        const markers = JSON.parse(el.getAttribute('markers') || '[]');
+        if (Array.isArray(markers) && markers[0] && markers[0].lat !== undefined) return markers[0].lat + ',' + markers[0].lng;
+    } catch (_) { /* kein gültiges JSON */ }
+    if (el._vmMap) {
+        const c = el._vmMap.getCenter();
+        return c.lat.toFixed(6) + ',' + c.lng.toFixed(6);
+    }
+    return (el.getAttribute('center') || '').trim();
+}
+
+function vmParseMapAppsTarget(text) {
+    const m = /^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/.exec(text);
+    return { text: text.trim(), coords: m ? [m[1], m[2]] : null };
+}
+
+/**
+ * Knopf mit Auswahlliste „In Karten-App öffnen“. getTarget() liefert beim Öffnen das aktuelle Ziel
+ * (Adresse oder lat,lng). Links öffnen in neuem Tab bzw. in der App (Universal Links).
+ */
+function vmMapAppsMenu(el, getTarget) {
+    const wanted = String(el.getAttribute('map-apps') || '').toLowerCase().split(/[\s,]+/).filter((k) => VM_MAP_APPS[k]);
+    const keys = wanted.length ? wanted : Object.keys(VM_MAP_APPS);
+    const label = el.getAttribute('map-apps-label') || 'In Karten-App öffnen';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'vm-apps';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'vm-apps-btn';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span></span>';
+    btn.querySelector('span').textContent = label;
+    const menu = document.createElement('ul');
+    menu.className = 'vm-apps-menu';
+    menu.hidden = true;
+    wrap.append(btn, menu);
+
+    const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    const open = () => {
+        const target = vmParseMapAppsTarget(getTarget() || '');
+        menu.innerHTML = '';
+        if (!target.text) {
+            const li = document.createElement('li');
+            li.className = 'vm-apps-empty';
+            li.textContent = 'Bitte zuerst ein Ziel eingeben.';
+            menu.appendChild(li);
+        }
+        else keys.forEach((k) => {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = VM_MAP_APPS[k].url(target);
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = VM_MAP_APPS[k].label;
+            a.addEventListener('click', close);
+            li.appendChild(a);
+            menu.appendChild(li);
+        });
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        menu.querySelector('a')?.focus();
+    };
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (menu.hidden) open(); else close();
+    });
+    // schließen: Klick daneben, Esc, Fokus verlässt das Menü
+    document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); }, { signal: vmSignal(el) });
+    wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); btn.focus(); } });
+    wrap.addEventListener('focusout', (e) => { if (!wrap.contains(e.relatedTarget)) close(); });
+
+    return wrap;
+}
+
+/** „In Karten-App öffnen“ als MapLibre-Control (ohne Route-Panel) */
+class VMMapAppsControl {
+    constructor(el) { this.el = el; }
+    onAdd() {
+        const c = document.createElement('div');
+        c.className = 'maplibregl-ctrl maplibregl-ctrl-group vm-apps-ctrl';
+        c.appendChild(vmMapAppsMenu(this.el, () => vmMapAppsTarget(this.el)));
+        this.container = c;
+        return c;
+    }
+    onRemove() { this.container?.remove(); }
+}
+
 /**
  * Fullscreen-Control für MapLibre GL
+ *
+ * Schaltet das ganze <vector-map>-Element in den Vollbildmodus – nicht nur die Karte –, damit Routenplaner,
+ * Hinweise und eigene Knöpfe (alle am Element) auch im Vollbild da sind. Wo Element-Vollbild fehlt (iPhone) oder
+ * scheitert, füllt das Element per CSS den Bildschirm (Klasse vm-fs-pseudo, Esc beendet).
  */
 class VMFullscreenControl {
     onAdd(map) {
         this.map = map;
         const container = document.createElement('div');
         container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-        
+
         const btn = document.createElement('button');
         btn.className = 'maplibregl-ctrl-icon vm-fs-btn';
         btn.type = 'button';
         btn.title = 'Vollbild';
+        btn.setAttribute('aria-label', 'Vollbild');
+        btn.setAttribute('aria-pressed', 'false');
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
-        
+
         btn.addEventListener('click', () => this.toggleFullscreen());
         container.appendChild(btn);
-        
+
         this.fullscreenBtn = btn;
-        document.addEventListener('fullscreenchange', () => this.updateButton());
-        
+        this._onChange = () => this.updateButton();
+        this._onKey = (e) => { if (e.key === 'Escape' && this.target().classList.contains('vm-fs-pseudo')) this.setPseudo(false); };
+        document.addEventListener('fullscreenchange', this._onChange);
+        document.addEventListener('webkitfullscreenchange', this._onChange);
+        document.addEventListener('keydown', this._onKey);
+
         return container;
     }
-    
+
+    /** Vollbild-Ziel: das <vector-map>-Element samt Panels, sonst der Kartencontainer */
+    target() {
+        const c = this.map.getContainer();
+        return c.closest('vector-map, vectormap') || c;
+    }
+
+    isActive() {
+        const t = this.target();
+        return (document.fullscreenElement || document.webkitFullscreenElement) === t || t.classList.contains('vm-fs-pseudo');
+    }
+
+    setPseudo(on) {
+        const t = this.target();
+        t.classList.toggle('vm-fs-pseudo', on);
+        document.documentElement.classList.toggle('vm-fs-lock', on);
+        this.updateButton();
+    }
+
     toggleFullscreen() {
-        const mapContainer = this.map.getContainer();
-        
-        if (!document.fullscreenElement) {
-            if (mapContainer.requestFullscreen) {
-                mapContainer.requestFullscreen().catch(err => console.warn('Fullscreen error:', err));
-            }
-        } else {
-            if (document.exitFullscreen) {
-                document.exitFullscreen();
-            }
+        const t = this.target();
+        if (this.isActive()) {
+            if (t.classList.contains('vm-fs-pseudo')) this.setPseudo(false);
+            else (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+            return;
+        }
+        const req = t.requestFullscreen || t.webkitRequestFullscreen;
+        if (!req) { this.setPseudo(true); return; }
+        try {
+            const p = req.call(t);
+            if (p && typeof p.catch === 'function') p.catch(() => this.setPseudo(true));
+        } catch (_) {
+            this.setPseudo(true);
         }
     }
-    
+
     updateButton() {
-        if (document.fullscreenElement) {
-            this.fullscreenBtn?.classList.add('vm-fs-active');
-        } else {
-            this.fullscreenBtn?.classList.remove('vm-fs-active');
-        }
+        const on = this.isActive();
+        this.fullscreenBtn?.classList.toggle('vm-fs-active', on);
+        this.fullscreenBtn?.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (this.fullscreenBtn) this.fullscreenBtn.title = on ? 'Vollbild beenden' : 'Vollbild';
+        // Karte an die neue Größe anpassen
+        requestAnimationFrame(() => { try { this.map.resize(); } catch (_) { /* Karte entfernt */ } });
     }
-    
+
     onRemove() {
-        // Cleanup
+        document.removeEventListener('fullscreenchange', this._onChange);
+        document.removeEventListener('webkitfullscreenchange', this._onChange);
+        document.removeEventListener('keydown', this._onKey);
+        if (this.target().classList.contains('vm-fs-pseudo')) this.setPseudo(false);
+    }
+}
+
+/* ---------- Aufräumen ---------- */
+
+/** AbortSignal je Karten-Element: globale Listener (document) damit anmelden, beim Entfernen alles auf einmal lösen */
+function vmSignal(el) {
+    if (!el._vmAbort) el._vmAbort = new AbortController();
+    return el._vmAbort.signal;
+}
+
+/** Alle Karten lösen, deren Element nicht mehr im Dokument hängt */
+function vmSweepDetachedMaps() {
+    VM_ACTIVE_MAPS.slice().forEach((map) => {
+        const c = map.getContainer();
+        if (c.isConnected) return;
+        const host = c.closest('vector-map, vectormap');
+        if (host) vmDestroyMap(host);
+        else { try { map.remove(); } catch (_) { /* */ } }
+    });
+}
+
+/** Karte und alles Drumherum lösen (Element aus dem DOM, PJAX-Wechsel) */
+function vmDestroyMap(el) {
+    if (el._vmMap) { try { el._vmMap.remove(); } catch (_) { /* schon weg */ } }
+    if (el._vmResizeObs) { el._vmResizeObs.disconnect(); el._vmResizeObs = null; }
+    if (el._vmObserver) { el._vmObserver.disconnect(); el._vmObserver = null; }
+    if (el._vmAbort) { el._vmAbort.abort(); el._vmAbort = null; }
+    if (el._vmCsAbort) { el._vmCsAbort.abort(); el._vmCsAbort = null; }
+    if (el.classList.contains('vm-fs-pseudo')) {
+        el.classList.remove('vm-fs-pseudo');
+        document.documentElement.classList.remove('vm-fs-lock');
     }
 }
 
 /* ---------- Custom Element ---------- */
 class VectorMapElement extends HTMLElement {
     connectedCallback()    { initVectorMap(this); }
-    disconnectedCallback() { if (this._vmMap) this._vmMap.remove(); }
+    disconnectedCallback() { vmDestroyMap(this); }
 }
 
 if (!customElements.get('vector-map')) {

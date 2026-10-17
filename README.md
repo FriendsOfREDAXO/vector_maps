@@ -267,7 +267,7 @@ worker-src blob:;
 | `3d` | `false` | `3d` | 3D-Gebäude aktivieren |
 | `interactive` | `true` | `interactive="false"` | Karte scrollbar/zoombar (Standard: aktiv). Mit `interactive="false"` deaktivieren |
 | `locate` | `false` | `locate` | Standort-Button anzeigen |
-| `fullscreen` | `false` | `fullscreen` | Fullscreen-Button anzeigen (Karte im Browser-Vollbild umschalten) |
+| `fullscreen` | `false` | `fullscreen` | Vollbild-Button: schaltet das ganze Element in den Vollbildmodus – Routenplaner, Info-Kästen und Buttons inklusive. Ohne Element-Vollbild (iPhone) füllt die Karte den Bildschirm per CSS, `Esc` beendet |
 | `controls-position` | `top-right` | `controls-position="top-left"` | Position der MapLibre-Navigation (`top-left`, `top-right`, `bottom-left`, `bottom-right`) |
 | `controls-cluster` | `right` | `controls-cluster="left"` | Einfacher Shortcut für sinnvolle Defaults: clustert Navigation + Locate/Satellit gemeinsam (`left`, `right`, oder direkte Ecke wie `bottom-left`) |
 | `controls-style` | – | `controls-style="rail"` | Vorgefertigte UI-Stile für Navigation/Kompass/Fullscreen plus Locate/Satellit: `soft`, `rail`, `minimal`, `bold` |
@@ -291,6 +291,10 @@ worker-src blob:;
 | `route-panel-style` | – | `route-panel-style="glass"` | Vorgefertigte Panel-Skins: `glass`, `contrast`, `brand` |
 | `route-panel-layout` | `overlay` | `route-panel-layout="side-right"` | Layout des Route-Panels: `overlay` (in der Karte), `side-right`, `side-left` |
 | `route-panel-width` | `340` | `route-panel-width="360"` | Breite der Seiten-Spalte bei `side-right`/`side-left` |
+| `map-apps` | – | `map-apps` / `map-apps="google,apple"` | Knopf „In Karten-App öffnen“ mit Auswahl: Google Maps, Apple Karten, OpenStreetMap, Waze (Liste optional). Mit `route-panel` im Panel (Ziel aus dem Feld „Nach“), sonst als Knopf auf der Karte |
+| `map-apps-target` | `route-to`, erster Marker, Kartenmitte | `map-apps-target="Friedrich-Alfred-Allee 15, Duisburg"` | Ziel für die Karten-Apps (Adresse oder `lat,lng`) |
+| `map-apps-label` | `In Karten-App öffnen` | `map-apps-label="Navigation starten"` | Beschriftung des Knopfs |
+| `map-apps-position` | `bottom-left` | `map-apps-position="top-left"` | Ecke des Knopfs ohne Routenpanel |
 | `fly-to` | – | `fly-to="48.85,2.35"` | Kartenansicht nach dem Laden animiert zentrieren |
 | `min-zoom` | `0` | `min-zoom="5"` | Minimaler Zoom-Level |
 | `max-zoom` | `22` | `max-zoom="18"` | Maximaler Zoom-Level |
@@ -611,6 +615,35 @@ Das Routenpanel wird als schwebende Seitenleiste auf der Karte angezeigt und erm
 ```
 
 > Das Routenpanel zeigt SVG-Icons für die drei Modi Auto, Zu Fuß und Fahrrad. Es überschreibt `route-from`/`route-to`-Attribute nicht, sondern verwendet sie als Startwerte.
+
+**Auf dem Handy und in schmalen Spalten** (Karte schmaler als 560 px) wird das Panel automatisch zu einer einklappbaren Leiste oben links: Sie startet eingeklappt („Route planen“), klappt nach der Berechnung wieder zu („Route ändern“), und die Routen-Info wandert nach unten. Zoom-Knöpfe und Quellenangabe bleiben frei. Bei `route-panel-layout="side-…"` steht das Panel auf schmalen Karten über der Karte statt daneben.
+
+**Im Vollbild** (`fullscreen`) bleibt das Panel mit allen Funktionen sichtbar.
+
+### In Karten-App öffnen (`map-apps`)
+
+Ein Knopf mit Auswahl übergibt das Ziel an die gängigen Navigations-Apps – auf dem Handy öffnen die Links direkt die App:
+
+```html
+<vectormap height="450" route-panel route-to="Friedrich-Alfred-Allee 15, 47055 Duisburg" route-to-locked
+    fullscreen map-apps>
+</vectormap>
+
+<!-- ohne Routenpanel: Knopf auf der Karte, nur ausgewählte Apps -->
+<vectormap center="51.4235,6.7765" zoom="15" height="320"
+    markers='[{"lat":51.4235,"lng":6.7765,"popup":"Sportschule Wedau"}]'
+    map-apps="google,apple,osm" map-apps-label="Anfahrt in der Karten-App">
+</vectormap>
+```
+
+| App | Link |
+|---|---|
+| Google Maps | Route zum Ziel (`google.com/maps/dir/?api=1&destination=…`) |
+| Apple Karten | Route zum Ziel (`maps.apple.com/?daddr=…`) |
+| OpenStreetMap | Ort auf der Karte bzw. Suche |
+| Waze | Navigation zum Ziel |
+
+Das Ziel ist `map-apps-target`, sonst `route-to`, sonst der erste Marker, sonst die Kartenmitte. Mit Routenpanel zählt die aktuelle Eingabe im Feld „Nach“. Die Links führen direkt zu den Anbietern (nicht über den Proxy) – erst der Klick des Besuchers öffnet den Dienst.
 
 ### Fixiertes Ziel (`route-to-locked`)
 
@@ -1155,7 +1188,28 @@ Alle externen Dienste werden über den internen PHP-Proxy geleitet, sodass keine
 | [Bright Sky / DWD](https://brightsky.dev/) | Deutsche Wetterdaten (DWD Open Data, Server in DE) |
 | [Esri ArcGIS / World Imagery](https://www.esri.com/) | Satellitenbilder (Raster-Tiles) |
 
-Der Proxy unter `lib/Proxy.php` validiert alle Anfragen gegen eine Whitelist und leitet nur Anfragen an erlaubte Domains weiter. SSRF-Attacks werden durch strikte Domain-Prüfung verhindert.
+Der Proxy unter `lib/Proxy.php` validiert alle Anfragen gegen eine Whitelist und leitet nur Anfragen an erlaubte Domains weiter. Weiterleitungen verfolgt er selbst und nur, wenn auch das Ziel auf der Whitelist steht (Schutz vor SSRF).
+
+**Er bremst die Website nie aus:**
+
+- Kurze Zeitlimits (Verbindung 3 s, Antwort 10 s, Overpass 25 s), Antworten höchstens 25 MB.
+- Nach einem Ausfall (Zeitüberschreitung, 429, 5xx) wird der Dienst 30 s lang nicht mehr gefragt; es gibt sofort eine Antwort (abgelaufene Fassung aus dem Cache oder 503) statt wartender PHP-Prozesse.
+- Die Session wird sofort freigegeben – parallel geladene Kacheln warten nicht aufeinander.
+
+**Cache** (`redaxo/cache/addons/vector_maps/proxy/`):
+
+| Inhalt | gültig |
+|---|---|
+| Kacheln, Schriften, Styles, Satellitenbilder | 30 Tage |
+| GeoJSON von GitHub/geoBoundaries | 7 Tage |
+| Adresssuche (Nominatim) | 1 Tag |
+| Routen (OSRM, Transitous), Overpass | 1 Stunde |
+| Wetter (Bright Sky, Open-Meteo) | 15 Minuten |
+
+- Abgelaufene Einträge werden neu geholt; scheitert das, wird die alte Fassung ausgeliefert.
+- Dateien, die 60 Tage nicht erneuert wurden, räumt der Proxy nach und nach selbst weg.
+- Geschrieben wird atomar, Leser sehen nie halbe Dateien.
+- Style-Dokumente korrigiert der Proxy einmal beim Abruf: Numerische Ausdrücke bekommen einen Rückfallwert, `['coalesce', ['get', …], 0]`. Das ist idempotent – mehrfaches Anwenden ändert nichts, und ältere, mehrfach eingewickelte Cache-Einträge werden automatisch repariert.
 
 ### Whitelist erweitern
 
@@ -1276,6 +1330,8 @@ npm run build
 Erzeugt `*.min.js` / `*.min.css` aus den Quelldateien in `assets/build/`.
 
 ### Vendor-Assets aktualisieren (z. B. neues MapLibre-Release)
+
+> **MapLibre 6:** Ab Version 6 gibt es MapLibre nur noch als ES-Modul (kein `maplibre-gl.js` mit globalem `maplibregl`), dazu WebGL2-Pflicht und weitere Änderungen. `build/package.json` bleibt deshalb bei `~5.24.0`; der Wechsel auf 6 ist ein eigener Umbau.
 
 ```bash
 cd build

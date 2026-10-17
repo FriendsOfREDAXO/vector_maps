@@ -1412,3 +1412,258 @@ body.rex-theme-dark .vm-fs-btn.vm-fs-active {
     }
 }
 
+
+/* =============================================================================
+   Vollbild: das ganze Element (Karte + Routenplaner + Hinweise), VMFullscreenControl
+   ============================================================================= */
+vector-map:fullscreen,
+vectormap:fullscreen,
+vector-map.vm-fs-pseudo,
+vectormap.vm-fs-pseudo {
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: none !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    background: var(--vm-fs-bg, #fff);
+}
+
+vector-map:-webkit-full-screen,
+vectormap:-webkit-full-screen {
+    width: 100vw !important;
+    height: 100vh !important;
+}
+
+/* Ohne Element-Vollbild (iPhone): Element füllt den Bildschirm */
+vector-map.vm-fs-pseudo,
+vectormap.vm-fs-pseudo {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 2147483000 !important;
+}
+
+html.vm-fs-lock,
+html.vm-fs-lock body {
+    overflow: hidden !important;
+}
+
+/* Im Vollbild: Seiten-Layout füllt die Höhe */
+vector-map:fullscreen .vm-map-pane,
+vectormap:fullscreen .vm-map-pane,
+vector-map.vm-fs-pseudo .vm-map-pane,
+vectormap.vm-fs-pseudo .vm-map-pane {
+    height: 100% !important;
+}
+
+/* =============================================================================
+   Schmale Karte (Klasse vm-compact, < 560 px): Routenplaner als einklappbare Leiste oben links –
+   neben Zoom/Vollbild rechts, die Quellenangabe unten bleibt frei
+   ============================================================================= */
+.vm-rp-toggle {
+    display: none;
+}
+
+.vm-compact .vm-route-panel:not(.vm-route-panel--side) {
+    top: 8px !important;
+    right: 58px !important;
+    bottom: auto !important;
+    left: 8px !important;
+    min-width: 0;
+    max-width: none;
+    max-height: calc(100% - 16px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.vm-compact .vm-rp-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 40px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: calc(var(--vm-rp-radius, 10px) - 4px);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.vm-compact .vm-rp-toggle-icon::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+}
+
+.vm-compact .vm-route-panel.vm-rp-collapsed .vm-rp-toggle-icon::before {
+    transform: rotate(-135deg) translateY(-2px);
+}
+
+.vm-compact .vm-route-panel.vm-rp-collapsed {
+    padding: 4px;
+    overflow: hidden;
+}
+
+.vm-compact .vm-route-panel.vm-rp-collapsed > :not(.vm-rp-toggle) {
+    display: none !important;
+}
+
+/* Seiten-Layout auf schmalen Karten: Panel über der Karte statt daneben */
+vector-map.vm-compact.vm-route-layout-side,
+vectormap.vm-compact.vm-route-layout-side {
+    flex-direction: column !important;
+    height: auto !important;
+}
+
+.vm-compact.vm-route-layout-side .vm-map-pane {
+    flex: none !important;
+    height: var(--vm-map-h, 400px) !important;
+}
+
+.vm-compact .vm-route-panel.vm-route-panel--side {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    height: auto;
+    order: -1;
+}
+
+.vm-compact.vm-route-layout-side.vm-fs-pseudo .vm-map-pane,
+.vm-compact.vm-route-layout-side:fullscreen .vm-map-pane {
+    flex: 1 1 auto !important;
+    height: auto !important;
+}
+
+vector-map.vm-compact.vm-route-layout-side.vm-fs-pseudo,
+vectormap.vm-compact.vm-route-layout-side.vm-fs-pseudo,
+vector-map.vm-compact.vm-route-layout-side:fullscreen,
+vectormap.vm-compact.vm-route-layout-side:fullscreen {
+    height: 100vh !important;
+    height: 100dvh !important;
+}
+
+/* =============================================================================
+   „In Karten-App öffnen“ (Attribut map-apps): Knopf mit Auswahlliste
+   ============================================================================= */
+.vm-apps {
+    position: relative;
+}
+
+.vm-apps-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 6px 10px;
+    border: 1px solid rgba(0, 0, 0, .15);
+    border-radius: 6px;
+    background: var(--vm-widget-bg, #fff);
+    color: var(--vm-widget-color, #1f2933);
+    font: 600 13px/1.2 inherit;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.vm-apps-btn:hover,
+.vm-apps-btn[aria-expanded="true"] {
+    background: var(--vm-nav-hover-bg, #eef2f5);
+}
+
+.vm-apps-btn:focus-visible,
+.vm-apps-menu a:focus-visible {
+    outline: 2px solid #1f6feb;
+    outline-offset: 2px;
+}
+
+.vm-apps-menu {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 6px);
+    z-index: 20;
+    min-width: 200px;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    background: var(--vm-widget-bg, #fff);
+    color: var(--vm-widget-color, #1f2933);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .2);
+}
+
+.vm-apps-menu[hidden] {
+    display: none;
+}
+
+.vm-apps-menu a {
+    display: block;
+    padding: 9px 12px;
+    border-radius: 6px;
+    color: inherit;
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.vm-apps-menu a:hover {
+    background: var(--vm-nav-hover-bg, #eef2f5);
+}
+
+.vm-apps-empty {
+    padding: 9px 12px;
+    color: inherit;
+    opacity: .8;
+    font-size: 13px;
+}
+
+/* Als Control auf der Karte: ohne Gruppen-Rahmen */
+.maplibregl-ctrl-group.vm-apps-ctrl {
+    background: transparent;
+    box-shadow: none;
+}
+
+.vm-apps-ctrl .vm-apps-btn {
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, .1);
+    border: 0;
+}
+
+/* Oben in der Karte: Liste nach unten öffnen */
+.maplibregl-ctrl-top-left .vm-apps-menu,
+.maplibregl-ctrl-top-right .vm-apps-menu,
+.vm-rp-apps .vm-apps-menu {
+    top: calc(100% + 6px);
+    bottom: auto;
+}
+
+.maplibregl-ctrl-top-right .vm-apps-menu,
+.maplibregl-ctrl-bottom-right .vm-apps-menu {
+    left: auto;
+    right: 0;
+}
+
+/* Im Route-Panel: volle Breite */
+.vm-rp-apps .vm-apps-btn {
+    width: 100%;
+    justify-content: center;
+}
+
+/* Schmale Karte: Liste im Panel ohne Überlagerung (Panel scrollt) */
+.vm-compact .vm-rp-apps .vm-apps-menu {
+    position: static;
+    margin-top: 6px;
+    box-shadow: none;
+    border: 1px solid rgba(0, 0, 0, .12);
+}
+
+/* Schmale Karte mit Routenplaner: Routen-Info unten statt oben (dort liegt die Leiste) */
+.vm-compact .vm-route-panel ~ .vm-route-badge,
+.vm-compact .vm-route-badge {
+    top: auto !important;
+    bottom: 76px !important;
+}

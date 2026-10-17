@@ -45,6 +45,7 @@ return [
                 'route_panel_width',
                 'route_panel_position',
                 'route_panel_style',
+                'map_apps',
             ],
         ],
         'section_tab' => [
@@ -115,6 +116,11 @@ return [
         'fullscreen' => [
             'type' => 'checkbox',
             'label' => 'Fullscreen-Button anzeigen',
+        ],
+        'map_apps' => [
+            'type' => 'checkbox',
+            'label' => '„In Karten-App öffnen“ anzeigen',
+            'notice' => 'Knopf mit Auswahl Google Maps, Apple Karten, OpenStreetMap, Waze – Ziel aus „Route nach“ bzw. dem Standort.',
         ],
         'route_panel' => [
             'type' => 'checkbox',
