@@ -15,7 +15,7 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
   - `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen bleiben global verfügbar, sobald das Modul geladen ist: Ereignis `vectormaps:ready`, Promise `window.VectorMaps.ready`. Eigene klassische Skripte, die sofort beim Laden darauf zugreifen, müssen darauf warten oder als `type="module"` laufen.
   - MapLibre 6 braucht **WebGL2**. Ohne WebGL2 zeigt die Karte einen Hinweis; die übrigen Karten werden weiter aufgebaut.
   - CSP: `worker-src blob:` ist nicht mehr nötig, der Worker liegt als eigene Datei auf dem Server.
-- **Friends Of REDAXO:** Das AddOn wird jetzt von Friends Of REDAXO gepflegt.
+- **Friends Of REDAXO:** vector_maps ist jetzt ein Friends-Of-REDAXO-AddOn (Lizenz MIT, © Friends Of REDAXO). Maintainer: Thomas Skerbis.
   - Namespace `KLXM\VectorMaps` → `FriendsOfRedaxo\VectorMaps`. Der alte Namespace funktioniert über einen Alias weiter (z. B. `KLXM\VectorMaps\Picker\PickerWidget`), bitte im eigenen Code umstellen.
   - Autor und Supportseite: https://github.com/FriendsOfREDAXO/vector_maps
 
@@ -37,6 +37,7 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
   - Demo „Übersicht“: Stil-Knöpfe für alle Anbieter.
   - Demo „Erweitert“: Reiter VersaTiles und basemap.de.
   - Hinweise im YForm-Feld.
+  - Screenshots im README aus dem Branch `assets` (Kartenstile, Routenplaner, Karten-Apps, Vollbild, Handy, Theme + 3D).
 
 ---
 

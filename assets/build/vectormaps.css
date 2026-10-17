@@ -1465,6 +1465,7 @@ vectormap.vm-fs-pseudo .vm-map-pane {
 }
 
 .vm-compact .vm-route-panel:not(.vm-route-panel--side) {
+    z-index: 11;   /* aufgeklappt über der Routen-Info */
     top: 8px !important;
     right: 58px !important;
     bottom: auto !important;

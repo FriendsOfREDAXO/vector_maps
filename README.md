@@ -1,6 +1,19 @@
 # Vector Maps – REDAXO AddOn
 
-Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, vollständig selbst 
+Interaktive Vektorkarten für REDAXO – datenschutzkonform, ohne API-Key, alle Dienste über den eigenen Server (Proxy). Mit MapLibre GL JS 6, kostenlosen Kartenstilen (OpenFreeMap, VersaTiles, basemap.de), Routenplaner, Themes und 3D-Gebäuden.
+
+
+![Routenplaner mit Abbiegehinweisen und „In Karten-App öffnen“](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/routenplaner.webp)
+
+| Kostenlose Kartenstile | Theme + 3D-Gebäude |
+|---|---|
+| <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/kartenstile.webp" alt="OpenFreeMap, VersaTiles und basemap.de nebeneinander"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/theme-3d.webp" alt="Theme „REDAXO“ mit 3D-Gebäuden"> |
+
+| Handy: Route | Handy: Formular | Vollbild |
+|---|---|---|
+| <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-route.webp" alt="Handy: eingeklappter Routenplaner mit Route" width="260"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-formular.webp" alt="Handy: aufgeklappter Routenplaner" width="260"> | <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/vollbild.webp" alt="Vollbild mit Routenplaner" width="420"> |
+
+> Ein AddOn von **[Friends Of REDAXO](https://github.com/FriendsOfREDAXO)** · Maintainer: **Thomas Skerbis** ([@skerbis](https://github.com/skerbis))
 
 ---
 
@@ -445,7 +458,7 @@ Drei kurze Copy-Paste-Vorlagen fuer typische Einsaetze.
     height="480"
     route-panel
     route-to="Am Schuermannshuett 40g, 47441 Moers"
-    route-to-popup="<strong>KLXM Crossmedia GmbH</strong><br>klxm.de"
+    route-to-popup="<strong>Musterfirma GmbH</strong><br>Musterstraße 1"
     route-to-locked
     route-mode="driving"
     controls-cluster="left"
@@ -644,11 +657,15 @@ Das Routenpanel wird als schwebende Seitenleiste auf der Karte angezeigt und erm
 
 > Das Routenpanel zeigt SVG-Icons für die drei Modi Auto, Zu Fuß und Fahrrad. Es überschreibt `route-from`/`route-to`-Attribute nicht, sondern verwendet sie als Startwerte.
 
+<p><img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-route.webp" alt="Handy: eingeklappte Leiste mit Route" width="240"> <img src="https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/mobil-formular.webp" alt="Handy: aufgeklapptes Formular" width="240"></p>
+
 **Auf dem Handy und in schmalen Spalten** (Karte schmaler als 560 px) wird das Panel automatisch zu einer einklappbaren Leiste oben links: Sie startet eingeklappt („Route planen“), klappt nach der Berechnung wieder zu („Route ändern“), und die Routen-Info wandert nach unten. Zoom-Knöpfe und Quellenangabe bleiben frei. Bei `route-panel-layout="side-…"` steht das Panel auf schmalen Karten über der Karte statt daneben.
 
 **Im Vollbild** (`fullscreen`) bleibt das Panel mit allen Funktionen sichtbar.
 
 ### In Karten-App öffnen (`map-apps`)
+
+![„In Karten-App öffnen“ mit Auswahl Google Maps, Apple Karten, OpenStreetMap, Waze](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/karten-apps.webp)
 
 Ein Knopf mit Auswahl übergibt das Ziel an die gängigen Navigations-Apps – auf dem Handy öffnen die Links direkt die App:
 
@@ -699,7 +716,7 @@ Wenn nur `route-to` gesetzt ist (kein `route-from`), wird das Ziel automatisch g
     height="500px"
     route-panel
     route-to="Am Schürmannshütt 40g, 47441 Moers"
-    route-to-popup="<strong>KLXM Crossmedia GmbH</strong><br>klxm.de"
+    route-to-popup="<strong>Musterfirma GmbH</strong><br>Musterstraße 1"
     route-to-locked
     route-mode="driving">
 </vectormap>
@@ -710,6 +727,8 @@ Der Nutzer sieht sofort den Ziel-Marker mit Popup. Sobald er seine Startadresse 
 ---
 
 ## Kostenlose Kartenstile
+
+![Kostenlose Kartenstile: OpenFreeMap liberty, fiord, dark, VersaTiles colorful, basemap.de und basemap.de mit Relief](https://raw.githubusercontent.com/FriendsOfREDAXO/vector_maps/assets/screenshots/kartenstile.webp)
 
 Alle Stile laufen über den REDAXO-Proxy (keine IP-Adressen an Dritte) und brauchen keinen API-Schlüssel:
 
@@ -975,13 +994,13 @@ Die Einblend-Dauer ist per Attribut steuerbar:
 
 ```html
 <!-- Standard: 350 ms -->
-<vectormap map-style="klxm" height="400px"></vectormap>
+<vectormap map-style="mein-theme" height="400px"></vectormap>
 
 <!-- Langsam: 800 ms -->
-<vectormap map-style="klxm" theme-transition="800" height="400px"></vectormap>
+<vectormap map-style="mein-theme" theme-transition="800" height="400px"></vectormap>
 
 <!-- Sofort (kein Fade): 0 ms -->
-<vectormap map-style="klxm" theme-transition="0" height="400px"></vectormap>
+<vectormap map-style="mein-theme" theme-transition="0" height="400px"></vectormap>
 ```
 
 ---
@@ -1418,6 +1437,9 @@ Der Workflow (`release.yml`) installiert npm-Abhängigkeiten, baut alle Assets (
 
 - **[MapLibre GL JS](https://maplibre.org/)** – Open-Source-Kartenbibliothek (BSD-2-Clause)
 - **[OpenFreeMap](https://openfreemap.org/)** – Kostenlose Vektorkacheln ohne API-Key
+- **[VersaTiles](https://versatiles.org/)** – Kostenlose Vektorkacheln, Betrieb in Deutschland
+- **[basemap.de](https://basemap.de/)** – Amtliche Vektorkarte Deutschland (BKG, CC BY 4.0)
+- **[PMTiles](https://github.com/protomaps/PMTiles)** – Einzeldatei-Kachelformat (BSD-3-Clause)
 - **[Nominatim / OSM](https://nominatim.openstreetmap.org/)** – Adress-Geocoding (ODbL)
 - **[OSRM](http://project-osrm.org/)** – Open Source Routing Machine (BSD-2-Clause)
 - **[Overpass API](https://overpass-api.de/)** – OSM-Datenbankabfragen (AGPL)
@@ -1430,4 +1452,6 @@ Der Workflow (`release.yml`) installiert npm-Abhängigkeiten, baut alle Assets (
 
 MIT License – siehe [LICENSE.md](LICENSE.md)
 
-Ein AddOn von [Friends Of REDAXO](https://github.com/FriendsOfREDAXO) – ursprünglich entwickelt von [KLXM Crossmedia](https://klxm.de).
+Ein AddOn von [Friends Of REDAXO](https://github.com/FriendsOfREDAXO).
+
+**Maintainer:** Thomas Skerbis ([@skerbis](https://github.com/skerbis)) – Fragen, Fehler und Ideen bitte als [Issue](https://github.com/FriendsOfREDAXO/vector_maps/issues).
