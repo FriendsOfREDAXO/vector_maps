@@ -792,6 +792,11 @@ class VectorMapPicker {
      route-panel               Interaktives Route-Panel mit Adresssuche einblenden
      route-to-locked           Zieladresse im Route-Panel fixieren (nicht änderbar, kein Autocomplete)
      route-no-steps            Abbiegehinweise im Route-Panel ausblenden
+     map-apps                   Knopf „In Karten-App öffnen“ (Google Maps, Apple Karten, OpenStreetMap, Waze)
+                                optional Liste: map-apps="google,apple,osm,waze"; mit route-panel im Panel
+     map-apps-target="…"        Ziel (Adresse oder lat,lng) – sonst route-to, erster Marker, Kartenmitte
+     map-apps-label="…"         Beschriftung des Knopfs
+     map-apps-position="…"      Ecke ohne route-panel (Standard: bottom-left)
      nearby="amenity=charging_station" Overpass-Filter für POI-Umgebungssuche
      nearby-radius="1000"       Suchradius in Metern (Standard: 1000)
      nearby-label="Ladestn."    Label für Marker-Popups (optional, sonst OSM-Tags)
@@ -1010,30 +1015,70 @@ function vmTransformRequest(url) {
 }
 
 /**
- * Ersetzt ['get', prop] (auch tief in Expressions) durch ['coalesce', ['get', prop], 0].
- * Verhindert MapLibre-Warnungen "Expected value to be of type number, but found null"
- * when OSM buildings lack height/min_height attributes.
+ * Sichert ['get', …] in numerischen Expressions mit einem Fallback ab: ['coalesce', ['get', …], 0].
+ * Verhindert MapLibre-Warnungen "Expected value to be of type number, but found null", z. B. wenn
+ * OSM-Gebäude keine height/min_height haben.
+ *
+ * Idempotent: Ein ['get', …], das direkt in einem coalesce steht, ist schon abgesichert und bleibt
+ * unverändert; verschachtelte coalesce werden zusammengefasst und Argumente hinter dem ersten festen
+ * Wert entfernt (nie erreicht). So wächst die Expression bei wiederholtem Aufruf (Sprachwechsel,
+ * styledata) nicht, und früher mehrfach eingewickelte Styles werden wieder gerade
+ * (['coalesce', ['coalesce', ['get', 'x'], 0], 0] → ['coalesce', ['get', 'x'], 0]).
+ * Auch die Reihenfolge bleibt richtig: ['coalesce', ['get', 'render_height'], ['get', 'height'], 0]
+ * bleibt so – vorher wurde daraus coalesce(coalesce(render_height, 0), …) und height griff nie.
+ *
+ * @param {*} expr
+ * @param {string|null} prop nur dieses Feld absichern (null = jedes get)
+ * @returns {*}
+ */
+function vmGuardGets(expr, prop) {
+    if (!Array.isArray(expr) || expr[0] === 'literal') return expr;
+    const isGet = (e) => Array.isArray(e) && e[0] === 'get';
+    if (isGet(expr)) return (prop === null || expr[1] === prop) ? ['coalesce', expr, 0] : expr;
+    if (expr[0] !== 'coalesce') return expr.map((e, i) => (i === 0 ? e : vmGuardGets(e, prop)));
+
+    // coalesce: Argumente bearbeiten (gets direkt darin sind schon abgesichert), verschachtelte coalesce einebnen
+    // Steht ein coalesce nicht am Ende, ist seine abschließende 0 ein früher angehängter Fallback, der die
+    // folgenden Argumente verdecken würde – weglassen (coalesce(coalesce(a, 0), b, 0) → coalesce(a, b, 0)).
+    const args = [];
+    const rest = expr.slice(1);
+    rest.forEach((arg, i) => {
+        const done = isGet(arg) ? arg : vmGuardGets(arg, prop);
+        if (Array.isArray(done) && done[0] === 'coalesce') {
+            const inner = done.slice(1);
+            if (i < rest.length - 1 && inner.length > 1 && inner[inner.length - 1] === 0) inner.pop();
+            args.push(...inner);
+        } else {
+            args.push(done);
+        }
+    });
+    // hinter dem ersten festen Wert (Zahl, Text, true/false) wird nichts mehr ausgewertet
+    const fixed = args.findIndex((a) => a !== null && !Array.isArray(a));
+    const out = fixed === -1 ? args : args.slice(0, fixed + 1);
+    // endet die Kette mit einem get des gesuchten Felds, fehlt der Fallback
+    const last = out[out.length - 1];
+    if (isGet(last) && (prop === null || last[1] === prop)) out.push(0);
+
+    return ['coalesce', ...out];
+}
+
+/**
+ * Sichert ['get', prop] (auch tief in Expressions) mit coalesce ab – siehe vmGuardGets().
  * @param {*} expr
  * @param {string} prop
  * @returns {*}
  */
 function vmWrapGetWithCoalesce(expr, prop) {
-    if (!Array.isArray(expr)) return expr;
-    if (expr[0] === 'get' && expr[1] === prop) return ['coalesce', expr, 0];
-    return expr.map(e => vmWrapGetWithCoalesce(e, prop));
+    return vmGuardGets(expr, prop);
 }
 
 /**
- * Ersetzt rekursiv alle ['get', ...]-Expressions durch
- * ['coalesce', ['get', ...], 0], damit numerische Properties bei
- * fehlenden/null Featurewerten nicht warnen.
+ * Sichert alle ['get', …] in numerischen Expressions mit coalesce ab – siehe vmGuardGets().
  * @param {*} expr
  * @returns {*}
  */
 function vmWrapAnyGetWithCoalesce(expr) {
-    if (!Array.isArray(expr)) return expr;
-    if (expr[0] === 'get') return ['coalesce', expr, 0];
-    return expr.map((entry) => vmWrapAnyGetWithCoalesce(entry));
+    return vmGuardGets(expr, null);
 }
 
 /**
@@ -1184,6 +1229,22 @@ function vmFixExtrusionLayers(map) {
 }
 
 /**
+ * Paint-/Layout-Eigenschaft nur setzen, wenn sich der Wert ändert. setPaintProperty/setLayoutProperty lösen
+ * „styledata“ aus; Handler, die darauf Theme oder Sprache neu anwenden, liefen sonst endlos weiter.
+ */
+function vmSetPaint(map, layerId, prop, value) {
+    const cur = map.getPaintProperty(layerId, prop);
+    if (cur === value || JSON.stringify(cur) === JSON.stringify(value)) return;
+    map.setPaintProperty(layerId, prop, value);
+}
+
+function vmSetLayout(map, layerId, prop, value) {
+    const cur = map.getLayoutProperty(layerId, prop);
+    if (cur === value || JSON.stringify(cur) === JSON.stringify(value)) return;
+    map.setLayoutProperty(layerId, prop, value);
+}
+
+/**
  * Wendet ein Theme-Farbobjekt auf eine geladene MapLibre-Karte an.
  * Iteriert alle Layer und überschreibt Farb-Properties nach Source-Layer und Typ.
  * @param {maplibregl.Map} map
@@ -1205,36 +1266,36 @@ function vmApplyTheme(map, colors) {
         try {
             // Eigene Route-Layer (dynamisch via vmAddRoutePanel hinzugefügt)
             if (layer.id === 'vm-route-line') {
-                if (colors.route_line) map.setPaintProperty(layer.id, 'line-color', colors.route_line);
+                if (colors.route_line) vmSetPaint(map, layer.id, 'line-color', colors.route_line);
             } else if (type === 'background') {
-                map.setPaintProperty(layer.id, 'background-color', colors.land);
+                vmSetPaint(map, layer.id, 'background-color', colors.land);
             } else if (type === 'symbol') {
                 // transportation_name-Layer (Straßen-/Autobahnbeschriftungen): road_label statt label
                 const isRoadLabel = sl === 'transportation_name';
                 const textColor   = isRoadLabel && colors.road_label ? colors.road_label : colors.label;
-                map.setPaintProperty(layer.id, 'text-color', textColor);
-                map.setPaintProperty(layer.id, 'text-halo-color', colors.label_halo);
+                vmSetPaint(map, layer.id, 'text-color', textColor);
+                vmSetPaint(map, layer.id, 'text-halo-color', colors.label_halo);
                 if (haloWidth !== null && !isNaN(haloWidth)) {
-                    map.setPaintProperty(layer.id, 'text-halo-width', haloWidth);
+                    vmSetPaint(map, layer.id, 'text-halo-width', haloWidth);
                 }
                 // Hinweis: icon-color wirkt nur bei SDF-Sprites — OFM Liberty nutzt PNG-Sprites
                 // für Autobahn-Schilder, daher kein road_shield-Feld.
             } else if (sl === 'water' || sl === 'waterway') {
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', colors.water);
-                    try { map.setPaintProperty(layer.id, 'fill-outline-color', colors.water); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', colors.water);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', colors.water); } catch (_) {}
                 }
-                if (type === 'line') map.setPaintProperty(layer.id, 'line-color', colors.water);
+                if (type === 'line') vmSetPaint(map, layer.id, 'line-color', colors.water);
             } else if (sl === 'park') {
                 // Schutzgebiete / Nationalparks (eigener Source-Layer in OFM Liberty)
                 const parkColor   = colors.farmland !== undefined ? colors.farmland : colors.green;
                 const parkOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : parkColor;
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', parkColor);
-                    if (applyOutlines) try { map.setPaintProperty(layer.id, 'fill-outline-color', parkOutline); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', parkColor);
+                    if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', parkOutline); } catch (_) {}
                 }
                 // park_outline ist ein separater line-Layer (rgba(228,241,215,1) im OFM-Standard)
-                if (type === 'line' && applyOutlines) map.setPaintProperty(layer.id, 'line-color', parkOutline);
+                if (type === 'line' && applyOutlines) vmSetPaint(map, layer.id, 'line-color', parkOutline);
             } else if (sl === 'landcover' || sl === 'landuse') {
                 // 3 Grün-Klassen: dunkles Grün (Wald), helles Grün (Wiesen/Parks), Land (sonstige Landnutzung)
                 const isDark  = /wood|forest|scrub/i.test(layer.id);
@@ -1244,23 +1305,23 @@ function vmApplyTheme(map, colors) {
                 else if (isLight) c = colors.farmland !== undefined ? colors.farmland : colors.green;
                 else              c = colors.land;
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', c);
-                    try { map.setPaintProperty(layer.id, 'fill-outline-color', c); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', c);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', c); } catch (_) {}
                 } else if (type === 'line') {
                     // Separate Outline-Layer (z.B. landuse_overlay_line) → gleiche Farbe
-                    map.setPaintProperty(layer.id, 'line-color', c);
+                    vmSetPaint(map, layer.id, 'line-color', c);
                 }
             } else if (sl === 'aeroway') {
                 // Flughafen-Flächen und Rollwege ähnlich wie Nebenstraßen einfärben
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', colors.road_minor);
-                    try { map.setPaintProperty(layer.id, 'fill-outline-color', colors.road_minor); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', colors.road_minor);
+                    try { vmSetPaint(map, layer.id, 'fill-outline-color', colors.road_minor); } catch (_) {}
                 }
-                if (type === 'line') map.setPaintProperty(layer.id, 'line-color', colors.road_minor);
+                if (type === 'line') vmSetPaint(map, layer.id, 'line-color', colors.road_minor);
             } else if (sl === 'boundary') {
                 // Ländergrenzen / Verwaltungsgrenzen in Beschriftungsfarbe (gedämpft)
                 if (type === 'line') {
-                    try { map.setPaintProperty(layer.id, 'line-color', colors.label); } catch (_) {}
+                    try { vmSetPaint(map, layer.id, 'line-color', colors.label); } catch (_) {}
                 }
             } else if (sl === 'transportation') {
                 const isMajor = /motorway|trunk|primary/i.test(layer.id);
@@ -1271,27 +1332,27 @@ function vmApplyTheme(map, colors) {
                         // Casing/Outline-Layer der Straßen — nur wenn customize_outlines aktiv
                         if (applyOutlines) {
                             const casingColor = colors.road_casing !== undefined ? colors.road_casing : colors.road_minor;
-                            map.setPaintProperty(layer.id, 'line-color', casingColor);
+                            vmSetPaint(map, layer.id, 'line-color', casingColor);
                         }
                     } else {
                         let lineColor;
                         if (isRail)       lineColor = colors.rail !== undefined ? colors.rail : colors.road_minor;
                         else if (isMajor) lineColor = colors.road_major;
                         else              lineColor = colors.road_minor;
-                        map.setPaintProperty(layer.id, 'line-color', lineColor);
+                        vmSetPaint(map, layer.id, 'line-color', lineColor);
                     }
                 }
             } else if (sl === 'building') {
                 const buildingOutline = (applyOutlines && colors.outline !== undefined) ? colors.outline : colors.building;
                 if (type === 'fill') {
-                    map.setPaintProperty(layer.id, 'fill-color', colors.building);
-                    if (applyOutlines) try { map.setPaintProperty(layer.id, 'fill-outline-color', buildingOutline); } catch (_) {}
+                    vmSetPaint(map, layer.id, 'fill-color', colors.building);
+                    if (applyOutlines) try { vmSetPaint(map, layer.id, 'fill-outline-color', buildingOutline); } catch (_) {}
                 } else if (type === 'line') {
                     // Separate Gebäude-Outline-Layer — nur wenn customize_outlines aktiv
-                    if (applyOutlines) map.setPaintProperty(layer.id, 'line-color', buildingOutline);
+                    if (applyOutlines) vmSetPaint(map, layer.id, 'line-color', buildingOutline);
                 } else if (type === 'fill-extrusion') {
                     // 3D-Gebäude (dynamisch via vmAdd3dBuildings / add3dBuildings hinzugefügt)
-                    map.setPaintProperty(layer.id, 'fill-extrusion-color', colors.building);
+                    vmSetPaint(map, layer.id, 'fill-extrusion-color', colors.building);
                 }
             }
         } catch (_) { /* Einige Paint-Properties sind schreibgeschützt — ignorieren */ }
@@ -1387,7 +1448,7 @@ function vmSetLanguage(map, lang) {
                 ['get', 'name'],
             ];
 
-            map.setLayoutProperty(layer.id, 'text-field', [
+            vmSetLayout(map, layer.id, 'text-field', [
                 'case',
                 ['has', 'name:nonlatin'],
                 // Zweizeilig: bevorzugte-Sprache\nnon-latin (für Arabisch, CJK …)
@@ -1419,6 +1480,14 @@ function initVectorMap(el) {
     el.style.height    = /^\d+$/.test(height) ? height + 'px' : height;
     el.style.position  = 'relative';
     el.style.overflow  = 'hidden';
+    el.style.setProperty('--vm-map-h', el.style.height);
+
+    // Schmale Karte (Handy, enge Spalte): Klasse vm-compact – Routenplaner als einklappbare Leiste unten,
+    // Seiten-Layout untereinander (vectormaps.css)
+    if ('ResizeObserver' in window && !el._vmResizeObs) {
+        el._vmResizeObs = new ResizeObserver(() => el.classList.toggle('vm-compact', el.clientWidth > 0 && el.clientWidth < 560));
+        el._vmResizeObs.observe(el);
+    }
 
     // Lazy init via IntersectionObserver — verhindert „Too many active WebGL contexts"
     // wenn viele <vectormap>-Elemente gleichzeitig auf der Seite vorhanden sind
@@ -1894,6 +1963,12 @@ function vmBuildMap(el) {
     // Route-Panel (interaktive Adresssuche) — vor map.on('load') damit Panel sofort im DOM ist
     if (el.hasAttribute('route-panel')) {
         vmAddRoutePanel(el, map);
+    }
+
+    // „In Karten-App öffnen“ ohne Route-Panel: eigener Knopf auf der Karte
+    if (el.hasAttribute('map-apps') && !el.hasAttribute('route-panel')) {
+        const appsPos = vmNormalizeControlPosition(el.getAttribute('map-apps-position'), 'bottom-left');
+        map.addControl(new VMMapAppsControl(el), appsPos);
     }
 
     const has3d = el.hasAttribute('3d');
@@ -2536,6 +2611,7 @@ function vmAddRoutePanel(el, map) {
     const panel = document.createElement('div');
     panel.className = 'vm-route-panel';
     panel.innerHTML = `
+        <button type="button" class="vm-rp-toggle" aria-expanded="true"><span class="vm-rp-toggle-text">Route planen</span><span class="vm-rp-toggle-icon" aria-hidden="true"></span></button>
         <div class="vm-rp-field">
             <span class="vm-rp-label">Von</span>
             <div class="vm-rp-input-wrap">
@@ -2570,6 +2646,13 @@ function vmAddRoutePanel(el, map) {
     el._vmRoutePanel = panel;
     vmApplyRoutePanelPosition(el);
 
+    // „In Karten-App öffnen“: Ziel aus dem Feld „Nach“ (aktueller Wert beim Klick)
+    if (el.hasAttribute('map-apps')) {
+        const apps = vmMapAppsMenu(el, () => panel.querySelector('.vm-rp-to')?.value.trim() || vmMapAppsTarget(el));
+        apps.classList.add('vm-rp-apps');
+        panel.appendChild(apps);
+    }
+
     // Side-Layout: Panel als eigene Spalte links/rechts neben der Karte anordnen
     const layout = String(el.getAttribute('route-panel-layout') || '').toLowerCase();
     const mapPane = el._vmMapContainer || el.firstElementChild;
@@ -2585,6 +2668,19 @@ function vmAddRoutePanel(el, map) {
     const fromInput = panel.querySelector('.vm-rp-from');
     const toInput   = panel.querySelector('.vm-rp-to');
     const calcBtn   = panel.querySelector('.vm-rp-calc');
+
+    // Kleine Karten (Handy): Panel als Leiste unten, einklappbar – sonst verdeckt es die Karte.
+    // Der Knopf ist nur bei schmaler Karte sichtbar (CSS: Container-Abfrage auf das Element).
+    const toggleBtn = panel.querySelector('.vm-rp-toggle');
+    const isCompact = () => el.classList.contains('vm-compact') || (el.clientWidth > 0 && el.clientWidth < 560);
+    const setCollapsed = (on, label) => {
+        panel.classList.toggle('vm-rp-collapsed', on);
+        toggleBtn.setAttribute('aria-expanded', on ? 'false' : 'true');
+        toggleBtn.querySelector('.vm-rp-toggle-text').textContent = label || (on ? 'Route planen' : 'Einklappen');
+        requestAnimationFrame(() => { try { map.resize(); } catch (_) { /* */ } });
+    };
+    toggleBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('vm-rp-collapsed')));
+    if (isCompact() && !(initFrom && initTo)) setCollapsed(true);
     const clearBtn  = panel.querySelector('.vm-rp-clear');
     const locateBtn = panel.querySelector('.vm-rp-locate');
     let currentMode = initMode;
@@ -2690,6 +2786,8 @@ function vmAddRoutePanel(el, map) {
             await vmDrawRoute(el, map, fromVal, toVal, currentMode);
             if (!noSteps) vmRenderSteps(panel, el._vmRouteSteps, map);
             clearBtn.style.display = '';
+            // Handy: nach der Berechnung einklappen, damit die Route sichtbar ist
+            if (isCompact()) setCollapsed(true, 'Route ändern');
         } catch (e) {
             console.warn('Route-Panel Fehler:', e);
         } finally {
@@ -3546,61 +3644,218 @@ function vmSetupCsDemo(el, map) {
 
 /* ---------- MapLibre GL Controls ---------- */
 
+/* ---------- In Karten-App öffnen ---------- */
+
+const VM_MAP_APPS = {
+    google: {
+        label: 'Google Maps',
+        url: (t) => 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(t.text),
+    },
+    apple: {
+        label: 'Apple Karten',
+        url: (t) => 'https://maps.apple.com/?daddr=' + encodeURIComponent(t.text),
+    },
+    osm: {
+        label: 'OpenStreetMap',
+        url: (t) => t.coords
+            ? 'https://www.openstreetmap.org/?mlat=' + t.coords[0] + '&mlon=' + t.coords[1] + '#map=17/' + t.coords[0] + '/' + t.coords[1]
+            : 'https://www.openstreetmap.org/search?query=' + encodeURIComponent(t.text),
+    },
+    waze: {
+        label: 'Waze',
+        url: (t) => t.coords
+            ? 'https://waze.com/ul?ll=' + t.coords[0] + ',' + t.coords[1] + '&navigate=yes'
+            : 'https://waze.com/ul?q=' + encodeURIComponent(t.text) + '&navigate=yes',
+    },
+};
+
+/** Ziel für „In Karten-App öffnen“: map-apps-target, route-to, erster Marker oder Kartenmitte */
+function vmMapAppsTarget(el) {
+    const explicit = (el.getAttribute('map-apps-target') || el.getAttribute('route-to') || '').trim();
+    if (explicit) return explicit;
+    try {
+        const markers = JSON.parse(el.getAttribute('markers') || '[]');
+        if (Array.isArray(markers) && markers[0] && markers[0].lat !== undefined) return markers[0].lat + ',' + markers[0].lng;
+    } catch (_) { /* kein gültiges JSON */ }
+    if (el._vmMap) {
+        const c = el._vmMap.getCenter();
+        return c.lat.toFixed(6) + ',' + c.lng.toFixed(6);
+    }
+    return (el.getAttribute('center') || '').trim();
+}
+
+function vmParseMapAppsTarget(text) {
+    const m = /^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/.exec(text);
+    return { text: text.trim(), coords: m ? [m[1], m[2]] : null };
+}
+
+/**
+ * Knopf mit Auswahlliste „In Karten-App öffnen“. getTarget() liefert beim Öffnen das aktuelle Ziel
+ * (Adresse oder lat,lng). Links öffnen in neuem Tab bzw. in der App (Universal Links).
+ */
+function vmMapAppsMenu(el, getTarget) {
+    const wanted = String(el.getAttribute('map-apps') || '').toLowerCase().split(/[\s,]+/).filter((k) => VM_MAP_APPS[k]);
+    const keys = wanted.length ? wanted : Object.keys(VM_MAP_APPS);
+    const label = el.getAttribute('map-apps-label') || 'In Karten-App öffnen';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'vm-apps';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'vm-apps-btn';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span></span>';
+    btn.querySelector('span').textContent = label;
+    const menu = document.createElement('ul');
+    menu.className = 'vm-apps-menu';
+    menu.hidden = true;
+    wrap.append(btn, menu);
+
+    const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    const open = () => {
+        const target = vmParseMapAppsTarget(getTarget() || '');
+        menu.innerHTML = '';
+        if (!target.text) {
+            const li = document.createElement('li');
+            li.className = 'vm-apps-empty';
+            li.textContent = 'Bitte zuerst ein Ziel eingeben.';
+            menu.appendChild(li);
+        }
+        else keys.forEach((k) => {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = VM_MAP_APPS[k].url(target);
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = VM_MAP_APPS[k].label;
+            a.addEventListener('click', close);
+            li.appendChild(a);
+            menu.appendChild(li);
+        });
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        menu.querySelector('a')?.focus();
+    };
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (menu.hidden) open(); else close();
+    });
+    // schließen: Klick daneben, Esc, Fokus verlässt das Menü
+    document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
+    wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); btn.focus(); } });
+    wrap.addEventListener('focusout', (e) => { if (!wrap.contains(e.relatedTarget)) close(); });
+
+    return wrap;
+}
+
+/** „In Karten-App öffnen“ als MapLibre-Control (ohne Route-Panel) */
+class VMMapAppsControl {
+    constructor(el) { this.el = el; }
+    onAdd() {
+        const c = document.createElement('div');
+        c.className = 'maplibregl-ctrl maplibregl-ctrl-group vm-apps-ctrl';
+        c.appendChild(vmMapAppsMenu(this.el, () => vmMapAppsTarget(this.el)));
+        this.container = c;
+        return c;
+    }
+    onRemove() { this.container?.remove(); }
+}
+
 /**
  * Fullscreen-Control für MapLibre GL
+ *
+ * Schaltet das ganze <vector-map>-Element in den Vollbildmodus – nicht nur die Karte –, damit Routenplaner,
+ * Hinweise und eigene Knöpfe (alle am Element) auch im Vollbild da sind. Wo Element-Vollbild fehlt (iPhone) oder
+ * scheitert, füllt das Element per CSS den Bildschirm (Klasse vm-fs-pseudo, Esc beendet).
  */
 class VMFullscreenControl {
     onAdd(map) {
         this.map = map;
         const container = document.createElement('div');
         container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-        
+
         const btn = document.createElement('button');
         btn.className = 'maplibregl-ctrl-icon vm-fs-btn';
         btn.type = 'button';
         btn.title = 'Vollbild';
+        btn.setAttribute('aria-label', 'Vollbild');
+        btn.setAttribute('aria-pressed', 'false');
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
-        
+
         btn.addEventListener('click', () => this.toggleFullscreen());
         container.appendChild(btn);
-        
+
         this.fullscreenBtn = btn;
-        document.addEventListener('fullscreenchange', () => this.updateButton());
-        
+        this._onChange = () => this.updateButton();
+        this._onKey = (e) => { if (e.key === 'Escape' && this.target().classList.contains('vm-fs-pseudo')) this.setPseudo(false); };
+        document.addEventListener('fullscreenchange', this._onChange);
+        document.addEventListener('webkitfullscreenchange', this._onChange);
+        document.addEventListener('keydown', this._onKey);
+
         return container;
     }
-    
+
+    /** Vollbild-Ziel: das <vector-map>-Element samt Panels, sonst der Kartencontainer */
+    target() {
+        const c = this.map.getContainer();
+        return c.closest('vector-map, vectormap') || c;
+    }
+
+    isActive() {
+        const t = this.target();
+        return (document.fullscreenElement || document.webkitFullscreenElement) === t || t.classList.contains('vm-fs-pseudo');
+    }
+
+    setPseudo(on) {
+        const t = this.target();
+        t.classList.toggle('vm-fs-pseudo', on);
+        document.documentElement.classList.toggle('vm-fs-lock', on);
+        this.updateButton();
+    }
+
     toggleFullscreen() {
-        const mapContainer = this.map.getContainer();
-        
-        if (!document.fullscreenElement) {
-            if (mapContainer.requestFullscreen) {
-                mapContainer.requestFullscreen().catch(err => console.warn('Fullscreen error:', err));
-            }
-        } else {
-            if (document.exitFullscreen) {
-                document.exitFullscreen();
-            }
+        const t = this.target();
+        if (this.isActive()) {
+            if (t.classList.contains('vm-fs-pseudo')) this.setPseudo(false);
+            else (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+            return;
+        }
+        const req = t.requestFullscreen || t.webkitRequestFullscreen;
+        if (!req) { this.setPseudo(true); return; }
+        try {
+            const p = req.call(t);
+            if (p && typeof p.catch === 'function') p.catch(() => this.setPseudo(true));
+        } catch (_) {
+            this.setPseudo(true);
         }
     }
-    
+
     updateButton() {
-        if (document.fullscreenElement) {
-            this.fullscreenBtn?.classList.add('vm-fs-active');
-        } else {
-            this.fullscreenBtn?.classList.remove('vm-fs-active');
-        }
+        const on = this.isActive();
+        this.fullscreenBtn?.classList.toggle('vm-fs-active', on);
+        this.fullscreenBtn?.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (this.fullscreenBtn) this.fullscreenBtn.title = on ? 'Vollbild beenden' : 'Vollbild';
+        // Karte an die neue Größe anpassen
+        requestAnimationFrame(() => { try { this.map.resize(); } catch (_) { /* Karte entfernt */ } });
     }
-    
+
     onRemove() {
-        // Cleanup
+        document.removeEventListener('fullscreenchange', this._onChange);
+        document.removeEventListener('webkitfullscreenchange', this._onChange);
+        document.removeEventListener('keydown', this._onKey);
+        if (this.target().classList.contains('vm-fs-pseudo')) this.setPseudo(false);
     }
 }
 
 /* ---------- Custom Element ---------- */
 class VectorMapElement extends HTMLElement {
     connectedCallback()    { initVectorMap(this); }
-    disconnectedCallback() { if (this._vmMap) this._vmMap.remove(); }
+    disconnectedCallback() {
+        if (this._vmMap) this._vmMap.remove();
+        if (this._vmResizeObs) { this._vmResizeObs.disconnect(); this._vmResizeObs = null; }
+    }
 }
 
 if (!customElements.get('vector-map')) {

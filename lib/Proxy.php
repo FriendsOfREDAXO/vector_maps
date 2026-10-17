@@ -37,8 +37,17 @@ class Proxy
         'image/gif'                          => 'gif',
     ];
 
+    /** Upstream gilt nach einem Fehler so lange als gestört (Sekunden) – Anfragen gehen dann nicht mehr hinaus */
+    private const FAIL_PAUSE = 30;
+    /** Höchstgröße einer Antwort (Bytes) – größere Antworten werden abgebrochen */
+    private const MAX_BYTES = 25 * 1024 * 1024;
+
     public static function intercept(): void
     {
+        // Nie die Session sperren: Karten laden viele Kacheln parallel, mit offener Session warten sie aufeinander
+        if (PHP_SESSION_ACTIVE === session_status()) {
+            session_write_close();
+        }
         $targetUrl = rex_request('target_url', 'string', '');
 
         if (!$targetUrl) {
@@ -182,6 +191,14 @@ class Proxy
             }
         }
 
+        // Upstream gerade gestört: sofort antworten statt einen PHP-Prozess bis zum Timeout zu belegen
+        if (self::upstreamPaused($host)) {
+            rex_response::setStatus(rex_response::HTTP_SERVICE_UNAVAILABLE);
+            rex_response::setHeader('Retry-After', (string) self::FAIL_PAUSE);
+            rex_response::sendContent('Proxy upstream temporarily unavailable.');
+            exit;
+        }
+
         $ch = curl_init();
         $userAgent = 'REDAXO-VectorMaps-Proxy/1.1 (+https://www.redaxo.org/)';
         $commonHeaders = ['Accept: */*'];
@@ -210,8 +227,12 @@ class Proxy
         // CURLOPT_ENCODING = '' lässt cURL gzip/brotli automatisch dekomprimieren
         // ohne das schickt CloudFlare komprimierte Daten, MapLibre kann sie nicht parsen
         curl_setopt($ch, CURLOPT_ENCODING, '');
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        // Kurze Zeitlimits: ein langsamer Upstream darf keine PHP-Prozesse blockieren (Overpass rechnet länger)
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $isOverpassInterpreter ? 20 : 10);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+        curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+        curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, static fn ($r, int $dlTotal, int $dlNow): int => $dlNow > self::MAX_BYTES ? 1 : 0);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
 
         $content = curl_exec($ch);
@@ -221,6 +242,10 @@ class Proxy
         unset($ch);
 
         if ($httpCode !== 200 || false === $content) {
+            // Zeitüberschreitung, Verbindungsfehler oder Serverfehler: Upstream kurz pausieren
+            if (0 === $httpCode || 429 === $httpCode || $httpCode >= 500) {
+                self::pauseUpstream($host);
+            }
             $status = ($httpCode >= 400 && $httpCode <= 599) ? $httpCode : 502;
             rex_response::setStatus($status);
             rex_response::sendContent("Proxy upstream failed (HTTP $httpCode).");
@@ -251,7 +276,7 @@ class Proxy
         }
 
         $cacheFile = $cacheBase . '.' . $ext;
-        rex_file::put($cacheFile, $content);
+        self::writeAtomic($cacheFile, (string) $content);
 
         self::serveFile($cacheFile, $ext);
     }
@@ -267,6 +292,37 @@ class Proxy
         exit;
     }
 
+    /** Datei atomar schreiben (temporär + umbenennen) – parallele Leser bekommen nie eine halbe Datei */
+    private static function writeAtomic(string $file, string $content): void
+    {
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+        // Punkt vorn: passt nicht auf das Suchmuster des Caches (hash.*)
+        $tmp = $dir . '/.' . basename($file) . '.' . bin2hex(random_bytes(4)) . '.tmp';
+        if (false === @file_put_contents($tmp, $content) || !@rename($tmp, $file)) {
+            @unlink($tmp);
+        }
+    }
+
+    private static function pauseFile(string $host): string
+    {
+        return rex_path::addonCache('vector_maps', 'proxy/_paused/' . md5($host));
+    }
+
+    private static function upstreamPaused(string $host): bool
+    {
+        $file = self::pauseFile($host);
+
+        return is_file($file) && (time() - (int) @filemtime($file)) < self::FAIL_PAUSE;
+    }
+
+    private static function pauseUpstream(string $host): void
+    {
+        self::writeAtomic(self::pauseFile($host), (string) time());
+    }
+
     private static function sanitizeCachedStyleJsonFile(string $filePath): void
     {
         $raw = rex_file::get($filePath);
@@ -274,9 +330,10 @@ class Proxy
             return;
         }
 
+        // Korrektur ist idempotent: alte, mehrfach eingewickelte Einträge werden einmal repariert, danach bleibt die Datei
         $sanitized = self::sanitizeStyleJsonString($raw);
         if ($sanitized !== $raw) {
-            rex_file::put($filePath, $sanitized);
+            self::writeAtomic($filePath, $sanitized);
         }
     }
 
@@ -332,30 +389,66 @@ class Proxy
     }
 
     /**
-     * Rekursiv: null → 0 und ['get', ...] → ['coalesce', ['get', ...], 0]
-     * für numerische Style-Expressions.
+     * Rekursiv: null → 0 und ['get', …] → ['coalesce', ['get', …], 0] für numerische Style-Expressions.
      *
-     * @param mixed $value
-     * @return mixed
+     * Idempotent (wie vmGuardGets() in vectormaps.js): Ein get direkt in einem coalesce ist schon abgesichert und
+     * bleibt; verschachtelte coalesce werden eingeebnet, ein früher angehängter Fallback 0 mitten in der Kette
+     * entfällt, Argumente hinter dem ersten festen Wert ebenso. Mehrfacher Aufruf ändert nichts mehr, und früher
+     * mehrfach eingewickelte Styles im Cache werden wieder gerade.
      */
-    private static function sanitizeNumericStyleExpression(mixed $value): mixed
+    public static function sanitizeNumericStyleExpression(mixed $value): mixed
     {
         if (null === $value) {
             return 0;
         }
-
         if (!is_array($value)) {
             return $value;
         }
-
-        if (isset($value[0]) && 'get' === $value[0]) {
+        // Objekte (z. B. alte Stops-Funktionen) und Listen ohne Operator: nur die Werte bearbeiten
+        if (!array_is_list($value) || [] === $value || !is_string($value[0])) {
+            return array_map(self::sanitizeNumericStyleExpression(...), $value);
+        }
+        if ('literal' === $value[0]) {
+            return $value;
+        }
+        if ('get' === $value[0]) {
             return ['coalesce', $value, 0];
         }
+        if ('coalesce' !== $value[0]) {
+            $out = [$value[0]];
+            foreach (array_slice($value, 1) as $entry) {
+                $out[] = self::sanitizeNumericStyleExpression($entry);
+            }
 
-        foreach ($value as $k => $entry) {
-            $value[$k] = self::sanitizeNumericStyleExpression($entry);
+            return $out;
         }
 
-        return $value;
+        $isGet = static fn (mixed $e): bool => is_array($e) && array_is_list($e) && 'get' === ($e[0] ?? null);
+        $rest = array_slice($value, 1);
+        $args = [];
+        foreach ($rest as $i => $arg) {
+            $done = $isGet($arg) ? $arg : self::sanitizeNumericStyleExpression($arg);
+            if (is_array($done) && array_is_list($done) && 'coalesce' === ($done[0] ?? null)) {
+                $inner = array_slice($done, 1);
+                if ($i < count($rest) - 1 && count($inner) > 1 && 0 === end($inner)) {
+                    array_pop($inner);
+                }
+                array_push($args, ...$inner);
+            } else {
+                $args[] = $done;
+            }
+        }
+        // hinter dem ersten festen Wert wird nichts mehr ausgewertet
+        foreach ($args as $i => $arg) {
+            if (!is_array($arg)) {
+                $args = array_slice($args, 0, $i + 1);
+                break;
+            }
+        }
+        if ($isGet(end($args))) {
+            $args[] = 0;
+        }
+
+        return ['coalesce', ...$args];
     }
 }
