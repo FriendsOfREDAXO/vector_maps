@@ -5,6 +5,13 @@ Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Ver
 
 ---
 
+## [2.0.3] – 2026-11-18
+
+### Gefixt
+
+- **Karte blieb auf manchen Servern leer („Worker failed to load“):** MapLibre lag als `.mjs` vor. Viele Server (z. B. Plesk mit nginx) kennen diese Endung nicht und liefern sie als `application/octet-stream` aus; mit `X-Content-Type-Options: nosniff` verweigert der Browser dann das Modul bzw. den Worker. Die Dateien heißen jetzt `maplibre-gl.js` und `maplibre-gl-worker.js`, den Worker setzt `vectormaps.module.js` per `setWorkerUrl()` (mit derselben `?v=`-Version). Keine Server-Konfiguration mehr nötig.
+- Wer MapLibre **manuell** aus `assets/maplibre/` importiert hat: `maplibre-gl.mjs` → `maplibre-gl.js`, Worker per `maplibregl.setWorkerUrl(…/maplibre-gl-worker.js)` setzen.
+
 ## [2.0.2] – 2026-10-17
 
 ### Gefixt

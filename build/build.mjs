@@ -92,10 +92,10 @@ async function buildOwnAssets() {
  * [npm-Paket/Pfad, Zieldateiname, minifizieren?]
  */
 const vendorFiles = [
-    // MapLibre 6: nur noch ES-Module (Haupt- und Worker-Datei, schon minifiziert) – der Worker liegt neben
-    // maplibre-gl.mjs und wird von dort über import.meta.url gefunden
-    ['maplibre-gl/dist/maplibre-gl.mjs',        'maplibre-gl.mjs',        false],
-    ['maplibre-gl/dist/maplibre-gl-worker.mjs', 'maplibre-gl-worker.mjs', false],
+    // MapLibre 6: nur noch ES-Module (Haupt- und Worker-Datei, schon minifiziert). Abgelegt als .js, weil viele
+    // Server .mjs ohne JavaScript-MIME-Typ ausliefern; den Worker setzt vectormaps.module.js per setWorkerUrl()
+    ['maplibre-gl/dist/maplibre-gl.mjs',        'maplibre-gl.js',        false],
+    ['maplibre-gl/dist/maplibre-gl-worker.mjs', 'maplibre-gl-worker.js', false],
     ['maplibre-gl/dist/maplibre-gl.css',        'maplibre-gl.css',        true],
     ['pmtiles/dist/pmtiles.js',                 'pmtiles.js',             true],
 ];
