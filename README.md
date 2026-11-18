@@ -85,8 +85,8 @@ maplibre-gl.css          → MapLibre GL JS Kern-Styles
 vectormaps.css           → Web Component Styles + Dark Mode
 vectormaps.js            → Lader (klassisches Skript) – holt vectormaps.module.js nach
 vectormaps.module.js     → <vectormap> Custom Element (ES-Modul, importiert MapLibre GL JS 6)
-maplibre-gl.mjs          → MapLibre GL JS 6 (wird von vectormaps.js importiert)
-maplibre-gl-worker.mjs   → MapLibre-Worker (liegt daneben, wird automatisch gefunden)
+maplibre-gl.js           → MapLibre GL JS 6 (ES-Modul, wird von vectormaps.js importiert)
+maplibre-gl-worker.js    → MapLibre-Worker (liegt daneben, wird automatisch gesetzt)
 ```
 
 > **Ab Version 2.0 (MapLibre 6):** Eingebunden wird wie bisher nur `vectormaps.min.js` – das ist ein kleiner Lader, der die eigentliche Komponente (`vectormaps.module.min.js`, ES-Modul mit MapLibre 6) per `import()` nachholt. Das funktioniert mit `<script src>`, `defer`, `type="module"` und auch, wenn Lazy-Loader oder Optimierer das Skript-Tag umschreiben (ab 2.0.1). `maplibre-gl.js` gibt es nicht mehr. `window.maplibregl`, `vmProxyUrl()` und die übrigen bekannten Funktionen stehen global bereit, sobald `window.VectorMaps.ready` erfüllt ist (bzw. Ereignis `vectormaps:ready`). MapLibre 6 braucht **WebGL2**; fehlt es, zeigt die Karte einen Hinweis statt einer leeren Fläche.
@@ -261,7 +261,7 @@ worker-src 'self';
 script-src 'self';
 ```
 
-> Ab Version 2.0 (MapLibre 6) liegt der Worker als eigene Datei auf dem Server (`maplibre-gl-worker.mjs`) – `blob:` für `worker-src` ist nicht mehr nötig.
+> Ab Version 2.0 (MapLibre 6) liegt der Worker als eigene Datei auf dem Server (`maplibre-gl-worker.js`) – `blob:` für `worker-src` ist nicht mehr nötig.
 
 > Alle Tile-Requests laufen über den REDAXO-Proxy (`/?rex_api_vector_maps_proxy=1`), daher sind **keine** externen `connect-src`-Einträge für OpenFreeMap, Nominatim oder OSRM notwendig.
 
@@ -1359,8 +1359,8 @@ vector_maps/
 │   │   ├── vectormaps.css       # Quelle: Styles
 │   │   └── vectormaps.min.css   # Minifiziert (vom Build generiert)
 │   └── maplibre/                # Vendor-Assets (von npm kopiert)
-│       ├── maplibre-gl.mjs      # MapLibre GL JS 6 (ES-Modul, von vectormaps.module.js importiert)
-│       ├── maplibre-gl-worker.mjs # MapLibre-Worker (muss neben maplibre-gl.mjs liegen)
+│       ├── maplibre-gl.js       # MapLibre GL JS 6 (ES-Modul, von vectormaps.module.js importiert)
+│       ├── maplibre-gl-worker.js # MapLibre-Worker (Pfad setzt vectormaps.module.js per setWorkerUrl)
 │       ├── maplibre-gl.css      # MapLibre GL JS Styles
 │       └── pmtiles.js           # PMTiles-Decoder
 ├── build/                       # Build-Tooling (nicht im Release-ZIP)
@@ -1404,7 +1404,7 @@ Erzeugt `*.min.js` / `*.min.css` aus den Quelldateien in `assets/build/`.
 
 ### Vendor-Assets aktualisieren (z. B. neues MapLibre-Release)
 
-> **MapLibre 6:** Das Build-Skript kopiert `maplibre-gl.mjs`, `maplibre-gl-worker.mjs` und `maplibre-gl.css` unverändert (schon minifiziert). Beide `.mjs`-Dateien müssen im selben Ordner liegen. Eine neue Hauptversion von MapLibre vorher mit der Migrationsanleitung prüfen.
+> **MapLibre 6:** Das Build-Skript kopiert `maplibre-gl.mjs` und `maplibre-gl-worker.mjs` als `maplibre-gl.js` / `maplibre-gl-worker.js` (unverändert, schon minifiziert) sowie `maplibre-gl.css`. Die Endung `.js` ist Absicht: Viele Server liefern `.mjs` ohne JavaScript-MIME-Typ aus, Module werden dann blockiert. Den Worker setzt `vectormaps.module.js` per `setWorkerUrl()`. Eine neue Hauptversion von MapLibre vorher mit der Migrationsanleitung prüfen.
 
 ```bash
 cd build

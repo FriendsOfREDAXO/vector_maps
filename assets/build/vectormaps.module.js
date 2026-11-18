@@ -2,12 +2,21 @@
  * vector_maps – ES-Modul (MapLibre GL JS 6 gibt es nur noch als ES-Modul).
  * Geladen vom klassischen Lader vectormaps.js / vectormaps.min.js (dynamischer import()) – so funktioniert jede Art der
  * Einbindung. Direkt als <script type="module"> geht auch. MapLibre wird hier importiert, der Worker
- * (maplibre-gl-worker.mjs) liegt daneben und wird automatisch gefunden.
+ * (maplibre-gl-worker.js) liegt daneben und wird über setWorkerUrl() gesetzt.
+ * MapLibre liegt als .js statt .mjs vor: Viele Server (z. B. Plesk/nginx) kennen .mjs nicht und liefern es als
+ * application/octet-stream aus – mit „X-Content-Type-Options: nosniff“ verweigert der Browser dann das Modul.
  * Für bestehenden Code (Theme-Editor, Regionen, eigene Skripte mit maplibregl/vmProxyUrl) stellt das Modul
  * window.maplibregl und die bisherigen Funktionen weiter global bereit (siehe Ende der Datei); fertig ist das,
  * sobald window.VectorMaps.ready erfüllt ist bzw. das Ereignis „vectormaps:ready“ kam.
  */
-import * as maplibregl from '../maplibre/maplibre-gl.mjs';
+import * as maplibregl from '../maplibre/maplibre-gl.js';
+
+// MapLibre sucht den Worker sonst unter „maplibre-gl-worker.mjs“ neben sich. Gleiche ?v=-Version wie dieses Modul.
+if (!maplibregl.getWorkerUrl()) {
+    const vmWorkerUrl = new URL('../maplibre/maplibre-gl-worker.js', import.meta.url);
+    vmWorkerUrl.search = new URL(import.meta.url).search;
+    maplibregl.setWorkerUrl(vmWorkerUrl.href);
+}
 
 if (!window.maplibregl) window.maplibregl = maplibregl;
 
